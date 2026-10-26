@@ -290,12 +290,13 @@ local function plannedRange(slot, h)
     return range * stat * modifier("player_range_scale")
 end
 
--- spawn_cap, or 1 when the owned unit has a singular trait ("unique": the server refuses a second copy, verified 2026-10-25).
+-- spawn_cap (3 when the data has none: Dark Mage, user 2026-10-26; a wrong guess is corrected by the server's refusal, see learnedCap), or 1 for the "unique" trait
+-- (the server refuses a second copy, verified 2026-10-25). Other `singular` traits (Divine, Golden, Reaper, Sniper ...) only mean "no tier numeral", not a placement limit.
 local learnedCap = {} -- uuid -> cap the server enforced (a silent refusal while that many stand)
 local function placementCap(h)
-    local cap = h.def.spawn_cap or 1
+    local cap = h.def.spawn_cap or 3
     for _, t in h.traits or {} do
-        if Traits[t.trait] and Traits[t.trait].singular then cap = 1 end
+        if t.trait == "unique" then cap = 1 end
     end
     return math.min(cap, learnedCap[h.uuid] or math.huge)
 end
@@ -361,6 +362,24 @@ local function cell(ix, iz, y0)
             elseif hill and r.Instance:IsDescendantOf(hill) then c = { pos = r.Position, cls = "H" } end
         end
         cells[k] = c
+    end
+    return c
+end
+
+-- Same as cell() for any point (not only the grid), used for spots next to a standing unit.
+local rays = {}
+local function ray(x, z, y0)
+    local k = math.floor(x * 4 + 0.5) * 1000003 + math.floor(z * 4 + 0.5)
+    local c = rays[k]
+    if c == nil then
+        local r = workspace:Raycast(Vector3.new(x, y0 + 80, z), Vector3.new(0, -400, 0), rp)
+        c = false
+        if r and r.Instance.Name ~= "_donotplace" then
+            local hill = T:FindFirstChild("hill")
+            if r.Instance:IsDescendantOf(T.ground) then c = { pos = r.Position, cls = "G", key = k }
+            elseif hill and r.Instance:IsDescendantOf(hill) then c = { pos = r.Position, cls = "H", key = k } end
+        end
+        rays[k] = c
     end
     return c
 end
@@ -431,7 +450,7 @@ local function placedList(units, virtual)
         local h = slot and hb[slot]
         if h then
             local hbx = u:FindFirstChild("_hitbox")
-            table.insert(out, { pos = u:GetPivot().Position, r = hbx and hbx.Size.Y / 2 or hitR(h.def), range = plannedRange(slot, h), attacks = not isFarm(h.def), id = h.id,
+            table.insert(out, { pos = u:GetPivot().Position, r = hbx and hbx.Size.Y / 2 or hitR(h.def), range = plannedRange(slot, h), attacks = not isFarm(h.def), buffer = roleOf(h.def) == "buffer", id = h.id,
                 hybrid = h.def.hybrid_placement, hill = u:GetAttribute("_ap_hill") })
         end
     end
@@ -439,11 +458,25 @@ local function placedList(units, virtual)
     return out
 end
 
+-- Square spiral order of the cell offsets around the origin: 0 = the origin cell, then right, down, left, up with growing sides.
+local SPIRAL = {}
+do
+    local x, z, i, len, d = 0, 0, 0, 1, 1
+    local dirs = { { 1, 0 }, { 0, 1 }, { -1, 0 }, { 0, -1 } }
+    while len <= 100 do
+        for _ = 1, 2 do
+            for _ = 1, len do SPIRAL[x * 1000 + z] = i i += 1 x += dirs[d][1] z += dirs[d][2] end
+            d = d % 4 + 1
+        end
+        len += 1
+    end
+end
+
 -- Candidate spots for a slot, nearest first. `center` is the origin: the path point at Distance Percentage, or a saved position.
 -- Ground units may stand on ground within Ground Percentage of their range from it, hill units (and units that use either) on
--- hills within Hill Percentage; `boost` widens both radii when nothing in the pass before passed the hitbox check. The block grows
--- around its seed (the unit already standing nearest the origin; the origin itself for the first one) and cells rank by square
--- distance (the larger of the two offsets), so the units fill square rings, packed edge to edge.
+-- hills within Hill Percentage; `boost` widens both radii when nothing in the pass before passed the hitbox check. Candidates are
+-- ordered by the square spiral around the origin (the origin cell first), the same origin for every unit, so the first free cell
+-- in spiral order wins and the units grow outward in a packed square.
 local function rank(slot, h, placed, center, around, boost)
     local def = h.def
     local R0 = plannedRange(slot, h)
@@ -455,11 +488,6 @@ local function rank(slot, h, placed, center, around, boost)
     local cap = R0 * 1.5 + 10
     local function radius(pct) return math.min(math.max(pct / 100 * R0, 8) * (boost or 1), cap) end
     local gR, hR = radius(cfg.ground), radius(cfg.hill)
-    local ref, best = center, math.huge
-    for _, pl in placed do
-        local dd = (pl.pos - center).Magnitude
-        if dd < best then ref, best = pl.pos, dd end
-    end
     local cx, cz = math.floor(center.X / STEP + 0.5), math.floor(center.Z / STEP + 0.5)
     local n = math.ceil(math.max(gR, hR) / STEP)
     local out = {}
@@ -473,10 +501,67 @@ local function rank(slot, h, placed, center, around, boost)
                 if cl.cls == "H" then ok = (def.hill_unit or def.hybrid_placement) and d <= hR
                 else ok = not def.hill_unit and d <= gR end
                 if ok then
-                    local ex, ez = cl.pos.X - ref.X, cl.pos.Z - ref.Z
-                    table.insert(out, { pos = cl.pos, score = -(math.max(math.abs(ex), math.abs(ez)) + 0.3 * math.sqrt(ex * ex + ez * ez)), cls = cl.cls, key = ix * 100003 + iz })
+                    table.insert(out, { pos = cl.pos, score = -(SPIRAL[(ix - cx) * 1000 + (iz - cz)] or 1e6), cls = cl.cls, key = ix * 100003 + iz })
                 end
             end
+        end
+    end
+    -- Touching spots come first: the origin itself, then the four sides (and corners, a little later) of every unit standing,
+    -- at exactly hitbox + hitbox + gap, the ones closest to the origin (square distance) first. The grid cells above are the fallback.
+    local r0, seen = hitR(def), {}
+    local isBuf0 = roleOf(def) == "buffer"
+    local function touching(x, z, bonus, lift)
+        local ex, ez = x - center.X, z - center.Z
+        local d = math.sqrt(ex * ex + ez * ez)
+        if d > math.max(gR, hR) then return end
+        local cl = ray(x, z, center.Y)
+        if not cl or seen[cl.key] then return end
+        seen[cl.key] = true
+        local ok
+        if cl.cls == "H" then ok = (def.hill_unit or def.hybrid_placement) and d <= hR
+        else ok = not def.hill_unit and d <= gR end
+        if ok then table.insert(out, { pos = cl.pos, score = 1e5 - (math.max(math.abs(ex), math.abs(ez)) + 0.3 * d) - bonus + (lift or 0), cls = cl.cls, key = cl.key }) end
+    end
+    touching(center.X, center.Z, 0)
+    local DIRS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0.7071, 0.7071, 4 }, { -0.7071, 0.7071, 4 }, { 0.7071, -0.7071, 4 }, { -0.7071, -0.7071, 4 } }
+    local hasCopy = false
+    for _, pl in placed do if pl.id == h.id then hasCopy = true end end
+    -- Copies of the same unit stand against each other first (all Leafas together, all Erwins together), then a buffer against buffers.
+    local function rankOf(pl) return pl.id == h.id and 1 or ((isBuf0 and pl.buffer) and 2 or 3) end
+    for pass = 1, 3 do
+        for _, pl in placed do
+            if rankOf(pl) == pass then
+                local dist = pl.r + r0 + cfg.margin + 0.1
+                local lift = pass == 1 and 2000 or (pass == 2 and 1000 or 0)
+                for _, dir in DIRS do touching(pl.pos.X + dir[1] * dist, pl.pos.Z + dir[2] * dist, dir[3], lift) end
+            end
+        end
+    end
+    -- Buffs only reach units inside the buffer's range (Erwin 15, Leafa 25): a buffer takes the spots that reach the most units standing
+    -- (two buffers: within the shorter range), and an attacker takes the spots inside a standing buffer's range. Nothing fits = no filter (the unit is still placed).
+    local isBuf = roleOf(def) == "buffer"
+    local anchors = {}
+    for _, pl in placed do
+        if pl.attacks and roleOf(def) ~= "farm" then
+            if isBuf and pl.buffer then table.insert(anchors, { pos = pl.pos, reach = math.min(R0, pl.range) * 0.95 }) -- two buffers: the shorter range decides
+            elseif isBuf then table.insert(anchors, { pos = pl.pos, reach = R0 * 0.95 })
+            elseif pl.buffer then table.insert(anchors, { pos = pl.pos, reach = pl.range * 0.95 }) end
+        end
+    end
+    if #anchors > 0 and #out > 0 and not hasCopy then -- later copies follow their first copy (it was placed inside the reach)
+        local best = 0
+        for _, c in out do
+            local n = 0
+            for _, a in anchors do
+                if (Vector3.new(c.pos.X - a.pos.X, 0, c.pos.Z - a.pos.Z)).Magnitude <= a.reach then n += 1 end
+            end
+            c.reach = n
+            best = math.max(best, n)
+        end
+        if best > 0 then
+            local kept = {}
+            for _, c in out do if c.reach == best then table.insert(kept, c) end end
+            out = kept
         end
     end
     table.sort(out, function(a, b) return a.score > b.score end)
@@ -551,6 +636,7 @@ local function place(slot, h, units, live)
         table.insert(list, 1, { pos = lp, score = 1e9, cls = c and c.cls or "?", key = math.floor(lp.X / STEP + 0.5) * 100003 + math.floor(lp.Z / STEP + 0.5), learned = true })
     end
     checked, tries = 0, 0
+    local silentRun = 0
     for _, c in list do
         if not live() then return false, "stopped" end
         if tries >= 6 or checked >= 700 then break end
@@ -607,9 +693,12 @@ local function place(slot, h, units, live)
             logLine(("refused slot %d %s at (%.0f, %.1f, %.0f): %s"):format(slot, c.cls, c.pos.X, c.pos.Y, c.pos.Z, msgd))
         else
             counts.refused_silent += 1
+            silentRun += 1
             local standing = 0
             for _, u in units do if isCopy(u, h) then standing += 1 end end
-            if standing > 0 then
+            -- A silent refusal is usually a bad spot. It only means a hidden cap when the data lists no cap (or the cap is reached) and
+            -- three different spots in a row were refused.
+            if standing > 0 and silentRun >= 3 and (not h.def.spawn_cap or standing >= h.def.spawn_cap) then
                 learnedCap[h.uuid] = standing
                 counts.learned_cap += 1
                 logLine(("learned cap %d for slot %d %s (silent refusal)"):format(standing, slot, h.id))
@@ -961,7 +1050,7 @@ local function planSpots(units)
             end
             if not found then break end
             local hbx = hitR(e.h.def)
-            table.insert(virtual, { pos = found.pos, r = hbx, range = plannedRange(e.slot, e.h), attacks = not e.farm, id = e.h.id, hybrid = e.h.def.hybrid_placement, hill = found.cls == "H" })
+            table.insert(virtual, { pos = found.pos, r = hbx, range = plannedRange(e.slot, e.h), attacks = not e.farm, buffer = roleOf(e.h.def) == "buffer", id = e.h.id, hybrid = e.h.def.hybrid_placement, hill = found.cls == "H" })
             table.insert(spots, { slot = e.slot, pos = found.pos, r = hbx, cls = found.cls })
         end
     end

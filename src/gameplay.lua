@@ -14,7 +14,7 @@ local defaults = {
     sell = { enable = false, wave = 0, types = {} },
     sell_farm = { enable = false, wave = 0, types = {} },
     leave = { enable = false, wave = 0 },
-    delete_map = false, boost_fps = false, black_screen = false,
+    delete_map = false, boost_fps = false, black_screen = false, performance_mode = false,
     modifier = { enable = false, rank = {}, cap = {} },
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
@@ -36,19 +36,103 @@ end
 local function alive() return env.ZenoHub == Hub end
 
 -- Performance -------------------------------------------------------------------------------------------
--- Delete Map: decorative children of workspace._map are unparented and kept for restore. Placement
--- raycasts onto workspace._terrain, so _terrain, _road, _BASES and _map.obstacles stay.
-local removed = {}
+-- Delete Map: decorative children of workspace._map and the _terrain.terrain folder (buildings, props) are
+-- unparented and kept for restore. Placement raycasts only count _terrain.ground / .hill, so those, _road,
+-- _BASES and _map.obstacles stay.
+local removed = {} -- { instance, original parent }
+local function mapDecor()
+    local list, map, terr = {}, workspace:FindFirstChild("_map"), workspace:FindFirstChild("_terrain")
+    for _, c in map and map:GetChildren() or {} do
+        if c.Name ~= "obstacles" then table.insert(list, c) end
+    end
+    local deco = terr and terr:FindFirstChild("terrain")
+    if deco then table.insert(list, deco) end
+    return list
+end
 local function deleteMap(on)
-    local map = workspace:FindFirstChild("_map")
-    if on and map then
-        for _, c in map:GetChildren() do
-            if c.Name ~= "obstacles" then table.insert(removed, c) c.Parent = nil end
-        end
-    elseif not on then
-        for _, c in removed do pcall(function() c.Parent = map end) end
+    if on then
+        for _, c in mapDecor() do table.insert(removed, { c, c.Parent }) c.Parent = nil end
+    else
+        for _, r in removed do pcall(function() r[1].Parent = r[2] end) end
         removed = {}
     end
+end
+-- The map is built after injection; ready = placement ground exists. The lobby never gets one (gives up quietly).
+local function whenMapReady(fn)
+    task.spawn(function()
+        local terr = workspace:WaitForChild("_terrain", 30)
+        if terr and terr:WaitForChild("ground", 30) and workspace:WaitForChild("_map", 30) then fn() end
+    end)
+end
+
+-- Performance Mode (omega optimizer): destroys the map decor, every texture, decal, effect and light, plain
+-- materials, lowest quality, and hides every unit / enemy model (they stay in the tree, so Auto Play and the
+-- rest still work). Keeps _terrain.ground / .hill (placeable), _road, _BASES. One-way: off applies next match.
+local KILL = { "Decal", "SurfaceAppearance", "ParticleEmitter", "Trail", "Beam", "Smoke", "Fire", "Sparkles", "Light" } -- not Highlight: the game's hover / select outline
+local omegaOn, omegaUnits = false, nil
+-- Your own units get one welded colored block so you can see and click them. The game's click is a raycast on
+-- _UNITS that climbs to the model with a HumanoidRootPart and _stats, so a block inside the model counts.
+local BLOCK = "ZenoBlock"
+local function blockFor(m)
+    local hrp, st = m:WaitForChild("HumanoidRootPart", 5), m:WaitForChild("_stats", 5)
+    local owner = st and st:WaitForChild("player", 2)
+    if not (hrp and owner and owner.Value == LP) or m:FindFirstChild(BLOCK) then return end
+    local lo, hi
+    for _, p in m:GetDescendants() do
+        if p:IsA("BasePart") and p.Name:sub(1, 1) ~= "_" then -- _hitbox / _shadow are not the body
+            local h = p.Size / 2
+            lo = lo and lo:Min(p.Position - h) or p.Position - h
+            hi = hi and hi:Max(p.Position + h) or p.Position + h
+        end
+    end
+    if not lo then return end
+    local b = Instance.new("Part")
+    b.Name, b.Material, b.Color, b.CastShadow = BLOCK, Enum.Material.SmoothPlastic, Color3.fromRGB(60, 140, 255), false
+    b.CanCollide, b.CanTouch, b.Massless = false, false, true
+    b.Size = (hi - lo):Max(Vector3.one):Min(Vector3.one * 8)
+    b.Position = (lo + hi) / 2
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0, weld.Part1 = hrp, b
+    b.Parent, weld.Parent = m, b
+end
+local function omegaOne(d)
+    for _, c in KILL do
+        if d:IsA(c) then d:Destroy() return end
+    end
+    if d:IsA("BasePart") then
+        d.Material, d.CastShadow, d.Reflectance = Enum.Material.SmoothPlastic, false, 0
+        if d:IsA("MeshPart") then d.TextureID, d.RenderFidelity = "", Enum.RenderFidelity.Performance end
+        if omegaUnits and d.Name ~= BLOCK and d:IsDescendantOf(omegaUnits) then d.Transparency = 1 end
+    elseif d:IsA("SpecialMesh") then
+        d.TextureId = ""
+    end
+end
+local function omega(on)
+    if not on or omegaOn then return end
+    omegaOn = true
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+    Lighting.GlobalShadows, Lighting.FogEnd = false, 9e9
+    for _, e in Lighting:GetChildren() do
+        if e:IsA("PostEffect") or e:IsA("Atmosphere") or e:IsA("Sky") or e:IsA("Clouds") then e:Destroy() end
+    end
+    local water = workspace.Terrain
+    pcall(function() water.WaterWaveSize, water.WaterWaveSpeed, water.WaterReflectance = 0, 0, 0 end)
+    if Hub.mode ~= "match" then return end -- the lobby world holds the pads and NPCs: never strip it
+    whenMapReady(function()
+        for _, c in mapDecor() do c:Destroy() end
+        omegaUnits = workspace:WaitForChild("_UNITS")
+        local function track(m) if m:IsA("Model") then task.spawn(pcall, blockFor, m) end end
+        for _, m in omegaUnits:GetChildren() do track(m) end
+        table.insert(Hub.connections, omegaUnits.ChildAdded:Connect(track))
+        local cam = workspace:WaitForChild("Camera")
+        table.insert(Hub.connections, workspace.DescendantAdded:Connect(function(d)
+            task.defer(pcall, function() if not d:IsDescendantOf(cam) then omegaOne(d) end end)
+        end))
+        for i, d in workspace:GetDescendants() do
+            if not d:IsDescendantOf(cam) then pcall(omegaOne, d) end
+            if i % 3000 == 0 then task.wait() end
+        end
+    end)
 end
 
 -- Boost FPS: every property we change is remembered and put back when turned off.
@@ -151,12 +235,14 @@ if Tabs then
     end
 
     local perf = T:AddRightGroupbox("Performance", "gauge")
-    perf:AddToggle("PerfDeleteMap", { Text = "Delete Map", Tooltip = "Hides decorative map parts; placement terrain and paths stay. Off restores them.", Default = cfg.delete_map, Callback = set(cfg, "delete_map", deleteMap) })
+    perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Omega optimizer: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })
+    perf:AddToggle("PerfDeleteMap", { Text = "Delete Map", Tooltip = "Hides decorative map parts and buildings; placeable ground, hills and paths stay. Off restores them.", Default = cfg.delete_map, Callback = set(cfg, "delete_map", deleteMap) })
     perf:AddToggle("PerfBoostFps", { Text = "Boost FPS", Tooltip = "Plain materials, no shadows, effects or textures. Off restores them.", Default = cfg.boost_fps, Callback = set(cfg, "boost_fps", boostFps) })
     perf:AddToggle("PerfBlackScreen", { Text = "Black Screen", Tooltip = "Turns 3D rendering off. Right-click toggles it while on.", Default = cfg.black_screen, Callback = set(cfg, "black_screen", blackScreen) })
 end
 -- Apply saved choices after a teleport (toggle callbacks do not fire for their Default).
-if cfg.delete_map then deleteMap(true) end
+if cfg.delete_map then whenMapReady(function() if cfg.delete_map then deleteMap(true) end end) end
+if cfg.performance_mode then omega(true) end
 if cfg.boost_fps then boostFps(true) end
 if cfg.black_screen then blackScreen(true) end
 
