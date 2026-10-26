@@ -49,17 +49,35 @@ local function mapDecor()
     if deco then table.insert(list, deco) end
     return list
 end
+local MATCH = Hub.mode == "match" -- every Performance option is match-only: the lobby world holds the pads and NPCs
 local function deleteMap(on)
     if on then
+        if not MATCH then return end
         for _, c in mapDecor() do table.insert(removed, { c, c.Parent }) c.Parent = nil end
     else
         for _, r in removed do pcall(function() r[1].Parent = r[2] end) end
         removed = {}
     end
 end
+-- Nothing here may touch the game while it loads (Performance Mode destroying things mid-load is the suspected
+-- cause of a stuck Loading screen, 2026-10-26): wait until PlayerGui.Loading is closed and the character exists
+-- (or 20 s without one), plus a short grace for the game's own post-load setup.
+local function waitLoaded()
+    local pg, t0 = LP:WaitForChild("PlayerGui"), os.clock()
+    while alive() do
+        local g = pg:FindFirstChild("Loading")
+        if not (g and g.Enabled) and (LP.Character or os.clock() - t0 > 20) then
+            task.wait(3)
+            return alive()
+        end
+        task.wait(0.5)
+    end
+    return false
+end
 -- The map is built after injection; ready = placement ground exists. The lobby never gets one (gives up quietly).
 local function whenMapReady(fn)
     task.spawn(function()
+        if not waitLoaded() then return end
         local terr = workspace:WaitForChild("_terrain", 30)
         if terr and terr:WaitForChild("ground", 30) and workspace:WaitForChild("_map", 30) then fn() end
     end)
@@ -108,16 +126,18 @@ local function omegaOne(d)
     end
 end
 local function omega(on)
-    if not on or omegaOn then return end
+    if not on or omegaOn or not MATCH then return end
     omegaOn = true
-    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
-    Lighting.GlobalShadows, Lighting.FogEnd = false, 9e9
-    for _, e in Lighting:GetChildren() do
-        if e:IsA("PostEffect") or e:IsA("Atmosphere") or e:IsA("Sky") or e:IsA("Clouds") then e:Destroy() end
-    end
-    local water = workspace.Terrain
-    pcall(function() water.WaterWaveSize, water.WaterWaveSpeed, water.WaterReflectance = 0, 0, 0 end)
-    if Hub.mode ~= "match" then return end -- the lobby world holds the pads and NPCs: never strip it
+    task.spawn(function()
+        if not waitLoaded() then return end
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        Lighting.GlobalShadows, Lighting.FogEnd = false, 9e9
+        for _, e in Lighting:GetChildren() do
+            if e:IsA("PostEffect") or e:IsA("Atmosphere") or e:IsA("Sky") or e:IsA("Clouds") then e:Destroy() end
+        end
+        local water = workspace.Terrain
+        pcall(function() water.WaterWaveSize, water.WaterWaveSpeed, water.WaterReflectance = 0, 0, 0 end)
+    end)
     whenMapReady(function()
         for _, c in mapDecor() do c:Destroy() end
         omegaUnits = workspace:WaitForChild("_UNITS")
@@ -154,6 +174,7 @@ local function boostOne(d)
 end
 local function boostFps(on)
     if on then
+        if not MATCH then return end
         setProp(Lighting, "GlobalShadows", false)
         for _, e in Lighting:GetChildren() do
             if e:IsA("PostEffect") then setProp(e, "Enabled", false) end
@@ -186,9 +207,9 @@ local function setRendering(on)
     RunService:Set3dRenderingEnabled(on)
     backdrop.Enabled = not on
 end
-local function blackScreen(on) setRendering(not on) end
+local function blackScreen(on) if MATCH or not on then setRendering(not on) end end
 table.insert(Hub.connections, UIS.InputBegan:Connect(function(input, processed)
-    if cfg.black_screen and not processed and input.UserInputType == Enum.UserInputType.MouseButton2 then
+    if MATCH and cfg.black_screen and not processed and input.UserInputType == Enum.UserInputType.MouseButton2 then
         setRendering(not rendering)
     end
 end))
@@ -234,7 +255,7 @@ if Tabs then
         caps:AddSlider("ModCap_" .. c:gsub("%W", "_"), { Text = c, Default = cfg.modifier.cap[c], Min = 0, Max = 10, Rounding = 0, Callback = function(v) cfg.modifier.cap[c] = v Core.save_config() end })
     end
 
-    local perf = T:AddRightGroupbox("Performance", "gauge")
+    local perf = T:AddRightGroupbox("Performance (match only)", "gauge")
     perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Omega optimizer: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })
     perf:AddToggle("PerfDeleteMap", { Text = "Delete Map", Tooltip = "Hides decorative map parts and buildings; placeable ground, hills and paths stay. Off restores them.", Default = cfg.delete_map, Callback = set(cfg, "delete_map", deleteMap) })
     perf:AddToggle("PerfBoostFps", { Text = "Boost FPS", Tooltip = "Plain materials, no shadows, effects or textures. Off restores them.", Default = cfg.boost_fps, Callback = set(cfg, "boost_fps", boostFps) })
@@ -243,8 +264,13 @@ end
 -- Apply saved choices after a teleport (toggle callbacks do not fire for their Default).
 if cfg.delete_map then whenMapReady(function() if cfg.delete_map then deleteMap(true) end end) end
 if cfg.performance_mode then omega(true) end
-if cfg.boost_fps then boostFps(true) end
-if cfg.black_screen then blackScreen(true) end
+if cfg.boost_fps or cfg.black_screen then
+    task.spawn(function()
+        if not waitLoaded() then return end
+        if cfg.boost_fps then boostFps(true) end
+        if cfg.black_screen then blackScreen(true) end
+    end)
+end
 
 if Hub.mode ~= "match" then return Gameplay end
 

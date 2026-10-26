@@ -1,2 +1,2 @@
-48b0e8c 2026-10-26
-Loading failsafe: teleport to the lobby when the loading screen is stuck 60 s
+ae47f98 2026-10-26
+Performance options: wait for the loading screen, match only
