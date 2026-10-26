@@ -1,2 +1,2 @@
-61dc617 2026-10-26
-Abilities: skip units with no ability (active_attack is the text 'nil')
+b44682b 2026-10-26
+Webhook: proper names instead of ids; autoexec fallback, version stamp, opt-in sync hooks

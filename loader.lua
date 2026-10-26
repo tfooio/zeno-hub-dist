@@ -52,7 +52,13 @@ end
 
 Hub.Core = Hub.require("core")
 Hub.Game = Hub.require("game")
-Hub.Core.log("loaded", Hub.mode, "place", game.PlaceId, DEV and "dev" or "hosted")
+-- Dev mirror version stamp written by tools/sync.ps1 (commit, uncommitted count, sync time).
+local version = ""
+if DEV then
+    local vok, v = pcall(readfile, DEV_DIR .. "VERSION.txt")
+    if vok then version = v:match("%S[^%c]*") or "" end
+end
+Hub.Core.log("loaded", Hub.mode, "place", game.PlaceId, DEV and "dev" or "hosted", version)
 
 local ok, err = pcall(function() Hub.UI = Hub.require("ui") end)
 if not ok then Hub.Core.log("ERROR ui:", err) end

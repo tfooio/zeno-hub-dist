@@ -25,7 +25,9 @@ function RunLog.record(result)
     local stats = result.stats or {}
     local ok, ld = pcall(function() return Game.loader().LevelData end)
     ld = ok and ld or {}
+    local sok, stage = pcall(Game.stage, ld)
     return {
+        stage = sok and stage or nil, -- Story, Raid, Challenge ... (Game.stage)
         date = os.date("!%Y-%m-%dT%H:%M:%SZ"),
         user = user,
         mode = ld._gamemode,

@@ -40,35 +40,81 @@ local function duration(s)
     return ("%d:%02d"):format(s // 60, s % 60)
 end
 
--- Drop entries: items are {item_id, amount}; unit shape is unverified, so fall back to JSON.
+-- Large numbers as 20.5M / 3.2K (damage reaches eight digits).
+local function short(v)
+    if type(v) ~= "number" then return tostring(v or "-") end
+    for _, u in { { 1e9, "B" }, { 1e6, "M" }, { 1e4, "K" } } do
+        if math.abs(v) >= u[1] then return ("%.1f%s"):format(v / u[1], u[2]) end
+    end
+    return num(v)
+end
+
+-- Proper names for ids, from the game's own data; unknown ids are made readable (star_remnant -> Star Remnant).
+local Game = Hub.Game
+local cache = {}
+local function data(name)
+    if cache[name] == nil then
+        local ok, d = pcall(Game.data, name)
+        cache[name] = ok and type(d) == "table" and d or false
+    end
+    return cache[name] or {}
+end
+local CURRENCY = { gems = "Gems", gold = "Gold", units = "Units", GemsLegacy = "Legacy Gems", AprilCoins = "April Coins" } -- not in the Items data
+local function readable(id)
+    id = tostring(id):gsub("^_+", ""):gsub("__.*$", ""):gsub("_", " "):gsub("(%l)(%u)", "%1 %2")
+    return (id:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
+end
+local function itemName(id)
+    id = tostring(id)
+    local d = not CURRENCY[id] and data("Items")[id]
+    return CURRENCY[id] or (d and d.name) or readable(id)
+end
+local function unitName(id)
+    local d = data("Units")[tostring(id)]
+    return d and d.name or readable(id)
+end
+local STAGE = { story = "Story", raid = "Raid", challenge = "Challenge", infinite = "Infinite", legend = "Legend" }
+
+-- Drop entries: {item_id, amount} (verified) or units; the same drop seen twice is added up.
 local function drop_lines(list, out)
     if type(list) ~= "table" then return end
+    local sum, order = {}, {}
+    local function add(name, n)
+        if not sum[name] then sum[name] = 0 table.insert(order, name) end
+        sum[name] += n
+    end
     for _, d in list do
         if type(d) == "table" then
             local id = d.item_id or d.unit_id or d.id or d.name
-            table.insert(out, id and ("%s x%s"):format(id, num(d.amount or 1)) or HttpService:JSONEncode(d))
+            if id then add(d.unit_id and unitName(id) or itemName(id), tonumber(d.amount) or 1)
+            else table.insert(out, HttpService:JSONEncode(d)) end
         else
             table.insert(out, tostring(d))
         end
     end
+    for _, name in order do table.insert(out, ("%s x%s"):format(name, num(sum[name]))) end
 end
 
 function Webhook.embed(rec)
     local rewards = { ("Gems: %s"):format(num(rec.gems)), ("Gold: %s"):format(num(rec.gold)), ("XP: %s"):format(num(rec.xp)) }
     if type(rec.resources) == "table" then
         for k, v in rec.resources do
-            if type(v) ~= "number" or v ~= 0 then table.insert(rewards, ("%s: %s"):format(k, num(v))) end
+            if type(v) ~= "number" or v ~= 0 then table.insert(rewards, ("%s: %s"):format(itemName(k), num(v))) end
         end
     end
     local drops = {}
     drop_lines(rec.new_units, drops)
     drop_lines(rec.new_items, drops)
+    local stage = rec.stage or STAGE[rec.mode] or (rec.mode and readable(rec.mode)) or "-"
+    if tostring(rec.name or ""):find("^Dungeon Room") then stage = "Dungeon Run" end
+    local map = rec.map and data("Maps")[rec.map]
+    local place = (map and map.name) or (rec.map and readable(rec.map)) or nil
     local fields = {
-        { name = "Mode", value = ("%s / %s"):format(tostring(rec.mode or "-"), tostring(rec.difficulty or "-")), inline = true },
+        { name = "Mode", value = ("%s / %s"):format(stage, tostring(rec.difficulty or "-")), inline = true },
         { name = "Waves", value = ("%s / %s"):format(num(rec.waves), num(rec.num_waves)), inline = true },
         { name = "Time", value = duration(rec.time), inline = true },
         { name = "Kills", value = num(rec.kills), inline = true },
-        { name = "Damage", value = num(rec.damage), inline = true },
+        { name = "Damage", value = short(rec.damage), inline = true },
         { name = "First clear", value = rec.first_completion and "yes" or "no", inline = true },
         { name = "Rewards", value = table.concat(rewards, "\n"), inline = false },
         { name = "Drops", value = #drops > 0 and table.concat(drops, "\n"):sub(1, 1000) or "none", inline = false },
@@ -76,7 +122,8 @@ function Webhook.embed(rec)
     return {
         username = "Zeno Hub",
         embeds = { {
-            title = ("%s - %s (%s)"):format(rec.victory and "Victory" or "Defeat", tostring(rec.name or rec.level or "?"), tostring(rec.map or "?")),
+            title = rec.victory and "Victory - " .. (place and place .. " - " or "") .. tostring(rec.name or stage)
+                or "Defeat - " .. (place and place .. " - " or "") .. tostring(rec.name or stage),
             color = rec.victory and 0x2ECC71 or 0xE74C3C,
             fields = fields,
             footer = { text = tostring(rec.user or "") },
@@ -86,6 +133,17 @@ function Webhook.embed(rec)
 end
 
 -- Dungeon chests (src/dungeon.lua): "opened" = right after the last room, "rewards" = the inventory change seen in the lobby.
+-- Chest lines come as "<id> x<n>", "unit <id>" (rewards) and "<id> +<n>" (inventory change).
+local function rewardLine(line)
+    local id, n = line:match("^(%S+) x(%d+)$")
+    if id then return ("%s x%s"):format(itemName(id), n) end
+    local u = line:match("^unit (%S+)$")
+    return u and ("Unit: " .. unitName(u)) or line
+end
+local function gainedLine(line)
+    local id, d = line:match("^(%S+) ([+-]?%d+)$")
+    return id and ("%s %s"):format(itemName(id), d) or line
+end
 function Webhook.chestEmbed(rec)
     local opened = rec.kind == "opened"
     if rec.kind == "stuck" then
@@ -105,13 +163,15 @@ function Webhook.chestEmbed(rec)
     }
     if opened then
         table.insert(fields, { name = "Dungeon keys", value = ("%s -> %s"):format(tostring(rec.keys_before or "?"), tostring(rec.keys_after or "?")), inline = true })
-        local r = rec.rewards or {}
+        local r = {}
+        for _, l in rec.rewards or {} do table.insert(r, rewardLine(l)) end
         table.insert(fields, { name = "Rewards from the chests", value = #r > 0 and table.concat(r, "\n"):sub(1, 1000) or "none seen", inline = false })
         local m, seen = {}, {}
         for _, t in rec.messages or {} do if not seen[t] then seen[t] = true table.insert(m, t) end end
         if #m > 0 then table.insert(fields, { name = "Messages", value = table.concat(m, "\n"):sub(1, 1000), inline = false }) end
     else
-        local g = rec.gained or {}
+        local g = {}
+        for _, l in rec.gained or {} do table.insert(g, gainedLine(l)) end
         table.insert(fields, { name = "Inventory change since the last lobby visit", value = #g > 0 and table.concat(g, "\n"):sub(1, 1000) or "nothing changed", inline = false })
     end
     return { username = "Zeno Hub", embeds = { {
