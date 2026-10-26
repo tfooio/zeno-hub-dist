@@ -1,2 +1,2 @@
-d7a4779 2026-10-26
-Hosted build: ZenoForceHosted test flag and tools/publish_dist.py
+8b6a597 2026-10-26
+Docs: hosted friend build status
