@@ -1,2 +1,2 @@
-b44682b 2026-10-26
-Webhook: proper names instead of ids; autoexec fallback, version stamp, opt-in sync hooks
+d55fc4c 2026-10-26
+Auto Play upgrade policy, dungeon chest rewards/webhook, Shop Preset

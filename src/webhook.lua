@@ -75,24 +75,62 @@ local function unitName(id)
 end
 local STAGE = { story = "Story", raid = "Raid", challenge = "Challenge", infinite = "Infinite", legend = "Legend" }
 
+-- Remnant totals (user, 2026-10-26): "(Total: N)" next to what a match or chest run gave. The lobby reads the real count
+-- from the profile (profile_data.inventory.normal_items); a match has no profile, so the last lobby reading is kept in
+-- Data/totals_<user>.json and each match's drops are added to it. Unknown total = no suffix, never a guess.
+local TRACK = { star_remnant = true, star_remnant_limited = true }
+local totalsFile = Core.paths.data .. "/totals_" .. game:GetService("Players").LocalPlayer.Name .. ".json"
+local totals = {}
+do
+    local ok, d = pcall(function() return HttpService:JSONDecode(readfile(totalsFile)) end)
+    if ok and type(d) == "table" then for id in TRACK do if type(d[id]) == "number" then totals[id] = d[id] end end end
+end
+local function saveTotals() pcall(writefile, totalsFile, HttpService:JSONEncode(totals)) end
+local function readProfileTotals()
+    local pd = Game.profile()
+    local items = pd and pd.inventory and pd.inventory.normal_items
+    if type(items) ~= "table" then return false end
+    local changed = false
+    for id in TRACK do
+        local n = type(items[id]) == "number" and items[id] or 0
+        if totals[id] ~= n then totals[id] = n changed = true end
+    end
+    if changed then saveTotals() end
+    return true
+end
+local function addGain(id, n)
+    if TRACK[id] and totals[id] and tonumber(n) then totals[id] += tonumber(n) saveTotals() end
+end
+local function commas(n) return (tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")) end
+local function totalOf(id) return TRACK[id] and totals[id] and (" (Total: %s)"):format(commas(totals[id])) or "" end
+if Hub.mode == "lobby" then
+    task.spawn(function()
+        while getgenv().ZenoHub == Hub do
+            pcall(readProfileTotals)
+            task.wait(15)
+        end
+    end)
+end
+
 -- Drop entries: {item_id, amount} (verified) or units; the same drop seen twice is added up.
 local function drop_lines(list, out)
     if type(list) ~= "table" then return end
-    local sum, order = {}, {}
-    local function add(name, n)
+    local sum, order, ids = {}, {}, {}
+    local function add(name, n, id)
         if not sum[name] then sum[name] = 0 table.insert(order, name) end
         sum[name] += n
+        ids[name] = id
     end
     for _, d in list do
         if type(d) == "table" then
             local id = d.item_id or d.unit_id or d.id or d.name
-            if id then add(d.unit_id and unitName(id) or itemName(id), tonumber(d.amount) or 1)
+            if id then add(d.unit_id and unitName(id) or itemName(id), tonumber(d.amount) or 1, not d.unit_id and id or nil)
             else table.insert(out, HttpService:JSONEncode(d)) end
         else
             table.insert(out, tostring(d))
         end
     end
-    for _, name in order do table.insert(out, ("%s x%s"):format(name, num(sum[name]))) end
+    for _, name in order do table.insert(out, ("%s x%s%s"):format(name, num(sum[name]), totalOf(ids[name]))) end
 end
 
 function Webhook.embed(rec)
@@ -136,13 +174,13 @@ end
 -- Chest lines come as "<id> x<n>", "unit <id>" (rewards) and "<id> +<n>" (inventory change).
 local function rewardLine(line)
     local id, n = line:match("^(%S+) x(%d+)$")
-    if id then return ("%s x%s"):format(itemName(id), n) end
+    if id then return ("%s x%s%s"):format(itemName(id), n, totalOf(id)) end
     local u = line:match("^unit (%S+)$")
     return u and ("Unit: " .. unitName(u)) or line
 end
 local function gainedLine(line)
     local id, d = line:match("^(%S+) ([+-]?%d+)$")
-    return id and ("%s %s"):format(itemName(id), d) or line
+    return id and ("%s %s%s"):format(itemName(id), d, totalOf(id)) or line
 end
 function Webhook.chestEmbed(rec)
     local opened = rec.kind == "opened"
@@ -214,6 +252,8 @@ end
 
 -- Spawned so the HTTP call does not delay match.lua's next/replay on the same game_finished.
 local unsub = Core.on("run_finished", function(rec)
+    -- Totals first, even with the notification off, so the next report is right.
+    for _, d in rec.new_items or {} do if type(d) == "table" and d.item_id then addGain(d.item_id, d.amount) end end
     if not cfg.enabled then return end
     task.spawn(function()
         local ok, code = Webhook.send(Webhook.embed(rec))
@@ -222,6 +262,11 @@ local unsub = Core.on("run_finished", function(rec)
 end)
 table.insert(Hub.connections, { Disconnect = unsub })
 local unsubChest = Core.on("dungeon_chests", function(rec)
+    if rec.kind == "opened" then
+        for _, l in rec.rewards or {} do local id, n = l:match("^(%S+) x(%d+)$") if id then addGain(id, n) end end
+    elseif rec.kind == "rewards" then
+        readProfileTotals() -- in the lobby: the real count
+    end
     if not cfg.chest then return end
     task.spawn(function()
         local ok, code = Webhook.send(Webhook.chestEmbed(rec))

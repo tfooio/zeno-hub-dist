@@ -792,13 +792,16 @@ local function upgradeList(units)
     local wave = workspace._wave_num.Value
     for _, u in units do
         local slot = slotOf(hb, u)
-        local lim = slot and cfg.ulimit[slot]
+        -- A unit that is not on the hotbar but has upgrade levels (Vegito, the fusion of Carrot and Vegeta) is upgraded to its maximum too.
+        local extra = not slot and u._stats.max_upgrade.Value > 0 and defs[u._stats.id.Value]
+        if extra then slot = 7 end
+        local lim = slot and (cfg.ulimit[slot] or 0)
         if slot and lim ~= -2 and wave >= (cfg.uwave[slot] or 0) then
             local st = u._stats
             local lvl, max = st.upgrade.Value, st.max_upgrade.Value
             local goal = lim > 0 and math.min(lim, max) or max
             if lvl < goal then
-                local def = hb[slot].def
+                local def = extra or hb[slot].def
                 local step = def.upgrade and def.upgrade[lvl + 1]
                 local cost = step and step.cost and step.cost * costScale() or 0
                 local farm = isFarm(def)
@@ -813,7 +816,7 @@ local function upgradeList(units)
                 end
                 -- only a farm upgrade that cannot pay back before the last wave is skipped; a level that slows a unit still counts (range, new attacks)
                 if not (farm and value < 0) then
-                    table.insert(list, { unit = u, slot = slot, lvl = lvl, cost = cost, late = lim == -1, farm = cfg.focus_farm and farm, isfarm = farm, value = value })
+                    table.insert(list, { unit = u, slot = slot, id = st.id.Value, lvl = lvl, cost = cost, late = lim == -1, farm = cfg.focus_farm and farm, isfarm = farm, value = value })
                 end
             end
         end
@@ -834,7 +837,7 @@ local function upgradeList(units)
             if a.lvl ~= b.lvl then return a.lvl < b.lvl end
             return a.slot < b.slot
         end
-        local oa, ob = method == METHODS[4] and cfg.uorder[a.slot] or a.slot, method == METHODS[4] and cfg.uorder[b.slot] or b.slot
+        local oa, ob = method == METHODS[4] and (cfg.uorder[a.slot] or 7) or a.slot, method == METHODS[4] and (cfg.uorder[b.slot] or 7) or b.slot
         if oa ~= ob then return oa < ob end
         if a.slot ~= b.slot then return a.slot < b.slot end
         if a.lvl ~= b.lvl then return a.lvl > b.lvl end -- finish one unit before the next
@@ -1100,7 +1103,7 @@ end
 local function doUpgrade(up)
     local ok = Game.invoke("upgrade_unit_ingame", up.unit) == true
     counts.upgrades += ok and 1 or 0
-    logLine(("upgrade slot %d %s %d -> %d cost %.0f value %.4f %s"):format(up.slot, hb[up.slot].id, up.lvl, up.lvl + 1, up.cost, up.value or 0, ok and "ok" or "refused"))
+    logLine(("upgrade slot %d %s %d -> %d cost %.0f value %.4f %s"):format(up.slot, up.id, up.lvl, up.lvl + 1, up.cost, up.value or 0, ok and "ok" or "refused"))
     return ok
 end
 
@@ -1158,7 +1161,7 @@ function AutoPlay.start()
                         lastProgress = os.clock()
                         status(("placed slot %d %s%s"):format(want.slot, want.h.def.name or want.h.id, why and (" (" .. why .. ")") or ""))
                     else
-                        slotBlock[want.slot] = os.clock() + (reason == "cap" and 2 or 10)
+                        slotBlock[want.slot] = os.clock() + (reason == "cap" and 2 or (tostring(reason):find("Unique") and 120 or 10)) -- "Unique units may not be placed with others of its kind": the unit is still around (fused), retrying every 10 s only fills the log
                         logLine(("slot %d %s blocked: %s"):format(want.slot, want.h.id, tostring(reason)))
                     end
                     return

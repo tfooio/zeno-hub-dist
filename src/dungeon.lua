@@ -28,8 +28,9 @@ for k, v in defaults do if cfg[k] == nil then cfg[k] = type(v) == "table" and ta
 
 
 -- Run presets: `focus` is bought first (in this order), then the friend's order; `ignore` is never bought.
--- Item effects are read from DungeonServiceCore.ITEMS (see the Dungeon Info tab). `rewards` also turns on shrines and opens chests at depth 20.
+-- Item effects are read from DungeonServiceCore.ITEMS (see the Dungeon Info tab).
 local PRESETS = {
+    { name = "Magic + Big Items (only)", only = true, focus = { "philospher_stone", "deathcap", "celestial_blade", "stormbringer", "tome", "mage_coat", "genie_lamp", "moon_fragment", "gold_mask", "bow_legendary" }, ignore = {}, note = "Buys only these, in this order: Philosopher's Stone (all chests rare), Archmage's Hat, Celestial Blade, Stormbringer, Magic Tome, Mage Coat, Genie Lamp, Moon Fragment, Mask of Riches, Sylvanthorn. Skips every small item and the physical-only ones." },
     { name = "Balanced", focus = {}, ignore = { "axe", "axe_legendary" }, note = "The friend's order: cheaper units, chest luck, magic damage and attack speed first." },
     { name = "Damage - Physical", focus = { "hammer_legendary", "celestial_blade", "fire_axe", "sword3", "sword2", "sword1", "axe_legendary", "axe", "scythe" }, ignore = { "tome", "deathcap", "mage_coat" }, note = "Physical and all-damage items first (Aureus Maul, Celestial Blade, Headsplitter, swords, crit axes, Reaper Scythe). Skips magic-only items." },
     { name = "Damage - Magic", focus = { "deathcap", "celestial_blade", "tome", "mage_coat", "sword3", "sword2", "sword1", "scythe" }, ignore = { "fire_axe", "hammer_legendary", "axe", "axe_legendary" }, note = "Magic and all-damage items first (Archmage's Hat, Celestial Blade, Magic Tome, Mage Coat, swords). Skips physical-only items." },
@@ -37,7 +38,7 @@ local PRESETS = {
     { name = "Range", focus = { "bow_legendary", "bow3", "bow2", "bow1" }, ignore = { "axe", "axe_legendary" }, note = "Range items first (Sylvanthorn +150%, Elf Bow, Longbow, Bow)." },
     { name = "Economy (unit cost)", focus = { "gold_mask", "gold_shroom", "gold_branch" }, ignore = { "axe", "axe_legendary" }, note = "Placement/upgrade cost cuts first (Mask of Riches -50%, Golden Mushroom -30%, Golden Branch -15%)." },
     { name = "Control (slow enemies)", focus = { "frost_axe", "icebane" }, ignore = { "axe", "axe_legendary" }, note = "Enemy slows first (Glacial Axe -30%, Ice Dagger -20%)." },
-    { name = "Rewards (chest luck)", focus = { "genie_lamp", "hook2", "hook", "moon_fragment", "philospher_stone", "chest_mock_item" }, ignore = { "axe", "axe_legendary" }, rewards = true, note = "Chest luck and chest items first (Genie Lamp, Golden Fishhook, Fishhook, Shimmering Moon Fragment, Philosopher's Stone, Treasure Chest). Also turns on Auto Accept Shrine and opening all chests at depth 20 (waiting for the end gives a chance at the secret unit)." },
+    { name = "Rewards (chest luck)", focus = { "genie_lamp", "hook2", "hook", "moon_fragment", "philospher_stone", "chest_mock_item" }, ignore = { "axe", "axe_legendary" }, note = "Chest luck and chest items first (Genie Lamp, Golden Fishhook, Fishhook, Shimmering Moon Fragment, Philosopher's Stone, Treasure Chest). Shop only: Auto Accept Shrine is a separate toggle." },
 }
 local PRESET_NAMES = {}
 for _, p in PRESETS do table.insert(PRESET_NAMES, p.name) end
@@ -155,6 +156,14 @@ local function shop()
                 best, bi, br = it.id, i, rank[it.id]
             end
         end
+        -- Saving up: an offered Philosopher's Stone (all chests rare) we cannot afford yet and do not own is worth more than anything cheaper.
+        local stone = false
+        local saving = cfg.preset == PRESETS[1].name -- only this preset saves coins; every other buy order is unchanged
+        for _, it in cur.data do
+            if it.id == "philospher_stone" and rank[it.id] and math.ceil(core().ITEMS[it.id].cost * mult) > money then stone = true end
+        end
+        for _, it in d._items or {} do if it.id == "philospher_stone" then stone = false end end
+        if saving and stone and (not br or rank[best] ~= rank.philospher_stone) then Core.log("dungeon buy: saving coins for philospher_stone", "money", money) break end
         if not best then break end
         bought[best] = true
         Core.log("dungeon buy", best, "slot", bi, "money", money)
@@ -357,9 +366,8 @@ function Dungeon.apply_preset(name)
     local skip, order, put = set(p.ignore), {}, {}
     local function add(id) if not skip[id] and not put[id] then put[id] = true table.insert(order, id) end end
     for _, id in p.focus do add(id) end
-    for _, id in BUY_ORDER do add(id) end
+    for _, id in BUY_ORDER do if not p.only then add(id) end end -- `only` presets buy exactly their focus list
     cfg.buy_order, cfg.buy, cfg.preset = order, set(order), name
-    if p.rewards then cfg.shrine = true end
     Core.save_config()
     Core.log("dungeon preset", name, "buy", table.concat(order, ","))
     return p
@@ -565,27 +573,25 @@ if Tabs then
         local shrineT = shrine:AddToggle("DungeonShrine", { Text = "Auto Accept Shrine", Tooltip = "Accept a shrine's curse unless it is in Decline Shrine Curse. Off = always skip shrines.", Default = cfg.shrine, Callback = set1("shrine") })
         shrine:AddDropdown("DungeonDecline", { Text = "Decline Shrine Curse", Values = curseNames, Multi = true, Default = names(cfg.decline), Callback = pickSet("decline") })
         local shop = T:AddRightGroupbox("Shop", "shopping-cart")
-        local buyDD = shop:AddDropdown("DungeonBuy", { Text = "Auto Buy Dungeon Shop", Tooltip = "Items to buy in shops, best first in the order of the Run Preset (default Balanced = the friend's). Needs the coins; none selected = buy nothing.", Values = buyNames, Multi = true, Default = names(cfg.buy), Callback = pickSet("buy") })
+        local buyDD = shop:AddDropdown("DungeonBuy", { Text = "Auto Buy Dungeon Shop", Tooltip = "Items to buy in shops, best first in the order of the Shop Preset (default Balanced = the friend's). Needs the coins; none selected = buy nothing.", Values = buyNames, Multi = true, Default = names(cfg.buy), Callback = pickSet("buy") })
 
-        -- Presets set the buy order / selection (and, for Rewards, shrine + chest depth) in one click.
-        local pre = T:AddLeftGroupbox("Run Preset", "sliders-horizontal")
+        -- Shop presets set only the shop's buy list and order (nothing else), in one click.
         local function noteOf(name) for _, x in PRESETS do if x.name == name then return x.note end end return "" end
         local note
-        pre:AddDropdown("DungeonPreset", { Text = "Preset", Values = PRESET_NAMES, Default = cfg.preset, Callback = function(v)
+        shop:AddDropdown("DungeonPreset", { Text = "Shop Preset", Values = PRESET_NAMES, Default = cfg.preset, Callback = function(v)
             cfg.preset = v
             if note then note:SetText(noteOf(v)) end
         end })
-        note = pre:AddLabel(noteOf(cfg.preset), true)
-        pre:AddButton("Apply Preset", function()
+        note = shop:AddLabel(noteOf(cfg.preset), true)
+        shop:AddButton("Apply Shop Preset", function()
             local p = Dungeon.apply_preset(cfg.preset)
             if not p then return end
             local sel = {}
             for id in cfg.buy do if items[id] then sel[items[id].name] = true end end
             buyDD:SetValue(sel)
-            if p.rewards then shrineT:SetValue(true) end
-            Hub.UI.Library:Notify(("Preset applied: %s"):format(p.name))
+            Hub.UI.Library:Notify(("Shop preset applied: %s"):format(p.name))
         end)
-        pre:AddLabel("Applying replaces the Shop selection and its buy order. Room priority and the shrine decline list are not touched.", true)
+        shop:AddLabel("Applying replaces only the Shop selection and its buy order.", true)
 
         -- Dungeon Info tab: the game's own data, read live.
         local I = Tabs.DungeonInfo
