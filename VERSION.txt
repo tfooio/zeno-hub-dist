@@ -1,2 +1,2 @@
-a9a7605 2026-10-26
-Performance Mode: smaller unit blocks (half the body box, 1 to 4 studs)
+48b0e8c 2026-10-26
+Loading failsafe: teleport to the lobby when the loading screen is stuck 60 s

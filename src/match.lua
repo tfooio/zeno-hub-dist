@@ -9,7 +9,7 @@ local env = getgenv()
 local cfg = Core.config.auto or {}
 Core.config.auto = cfg
 cfg.finish = nil -- replaced by the next/replay/lobby toggles
-local defaults = { vote_start = false, wave_skip = false, skip_stop = 0, skip_types = {}, next = false, replay = false, lobby = false, finish_delay = 3, anti_afk = true }
+local defaults = { vote_start = false, wave_skip = false, skip_stop = 0, skip_types = {}, next = false, replay = false, lobby = false, finish_delay = 3, anti_afk = true, load_failsafe = true, load_timeout = 60 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
 local function alive() return env.ZenoHub == Hub end
@@ -39,7 +39,35 @@ if Tabs then
     fin:AddSlider("AutoFinishDelay", { Text = "Delay (s)", Default = cfg.finish_delay, Min = 0, Max = 30, Rounding = 0, Callback = set("finish_delay") })
     local secure = Tabs.Misc:AddLeftGroupbox("Secure", "shield")
     secure:AddToggle("AntiAfk", { Text = "Anti-AFK", Default = cfg.anti_afk, Callback = set("anti_afk") })
+    secure:AddToggle("LoadFailsafe", { Text = "Loading Failsafe", Tooltip = "If the game's loading screen stays up for the time below, teleport to the lobby.", Default = cfg.load_failsafe, Callback = set("load_failsafe") })
+    secure:AddSlider("LoadTimeout", { Text = "Loading Timeout (s)", Default = cfg.load_timeout, Min = 30, Max = 300, Rounding = 0, Callback = set("load_timeout") })
 end
+
+-- Loading failsafe: the game's own PlayerGui.Loading screen stuck up means the teleport or spawn hung (seen
+-- 2026-10-26: dungeon room loaded, no character, screen never closed). TeleportService works whatever the
+-- server is doing, unlike the teleport_back_to_lobby remote. Retries after another full timeout.
+local LOBBY_PLACE = 8304191830
+local TeleportService = game:GetService("TeleportService")
+task.spawn(function()
+    local pg = LP:WaitForChild("PlayerGui")
+    local since
+    while alive() do
+        task.wait(1)
+        local gui = pg:FindFirstChild("Loading")
+        if cfg.load_failsafe and gui and gui.Enabled then
+            since = since or os.clock()
+            if os.clock() - since >= cfg.load_timeout then
+                since = os.clock()
+                Core.log("loading failsafe: loading screen up for", cfg.load_timeout, "s, teleporting to the lobby")
+                Core.save_config() -- before the teleport (OnTeleport does not fire)
+                local ok, err = pcall(TeleportService.Teleport, TeleportService, LOBBY_PLACE)
+                if not ok then Core.log("ERROR loading failsafe:", err) end
+            end
+        else
+            since = nil
+        end
+    end
+end)
 
 table.insert(Hub.connections, LP.Idled:Connect(function()
     if not cfg.anti_afk then return end

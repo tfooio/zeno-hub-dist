@@ -1,6 +1,13 @@
 -- Zeno Hub loader (Anime Adventures). Entry point; also what queue_on_teleport re-runs.
 -- Dev mode: modules come from workspace "Zeno Hub/Dev/" (mirrored from the repo by tools/sync.ps1,
 -- since the executor cannot read outside workspace).
+local LOBBY_PLACE = 8304191830
+-- Failsafe for Roblox's own loading hanging: no module would ever run, so this one lives here (fixed 60 s,
+-- no config read yet). The in-game Loading screen has its own, configurable one in match.lua.
+task.spawn(function()
+    task.wait(60)
+    if not game:IsLoaded() then pcall(function() game:GetService("TeleportService"):Teleport(LOBBY_PLACE) end) end
+end)
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players = game:GetService("Players")
@@ -9,7 +16,6 @@ while not Players.LocalPlayer do task.wait() end
 local DEV_DIR = "Zeno Hub/Dev/"
 -- shortcut: no hosted build yet, set this when the repo is served somewhere reachable by HttpGet.
 local BASE_URL = "https://raw.githubusercontent.com/tfooio/zeno-hub-dist/main/"
-local LOBBY_PLACE = 8304191830
 
 local env = getgenv()
 if env.ZenoHub and env.ZenoHub.unload then pcall(env.ZenoHub.unload) end
