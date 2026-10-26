@@ -1,2 +1,2 @@
-ae47f98 2026-10-26
-Performance options: wait for the loading screen, match only
+b7dd120 2026-10-26
+Lobby tab: claimers, gold shop, stars, auto summoners, auto sell, no summon animation

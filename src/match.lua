@@ -96,6 +96,11 @@ end
 
 -- Ordered list of finish calls that are enabled and available; each is a fallback for the one before.
 function Match.finish_chain(victory)
+    -- Lobby tab: a selected summon target just became featured, so skip replay / next and go summon.
+    if Hub.Lobby then
+        local ok, want = pcall(Hub.Lobby.want_lobby)
+        if ok and want then return { { "teleport_back_to_lobby" } } end
+    end
     local chain = {}
     local function check(fn)
         local ok, res = pcall(fn, victory)
