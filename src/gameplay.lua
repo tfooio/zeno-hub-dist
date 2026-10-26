@@ -89,7 +89,7 @@ local function blockFor(m)
     local b = Instance.new("Part")
     b.Name, b.Material, b.Color, b.CastShadow = BLOCK, Enum.Material.SmoothPlastic, Color3.fromRGB(60, 140, 255), false
     b.CanCollide, b.CanTouch, b.Massless = false, false, true
-    b.Size = (hi - lo):Max(Vector3.one):Min(Vector3.one * 8)
+    b.Size = ((hi - lo) * 0.5):Max(Vector3.one):Min(Vector3.one * 4) -- half the body box, 1 to 4 studs
     b.Position = (lo + hi) / 2
     local weld = Instance.new("WeldConstraint")
     weld.Part0, weld.Part1 = hrp, b

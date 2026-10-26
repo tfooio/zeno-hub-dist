@@ -1,2 +1,2 @@
-a1a4b4a 2026-10-26
-Performance Mode (omega optimizer) and wider Delete Map
+a9a7605 2026-10-26
+Performance Mode: smaller unit blocks (half the body box, 1 to 4 studs)

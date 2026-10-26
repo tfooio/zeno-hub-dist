@@ -14,4 +14,4 @@ To start it by itself, save that same line as a file in your executor's `autoexe
 - Updates reach you the next time you run it (GitHub can take about 5 minutes to serve a new push).
 - Using scripts in Roblox can get an account banned. Use at your own risk.
 
-Version: a1a4b4a (2026-10-26)
+Version: a9a7605 (2026-10-26)
