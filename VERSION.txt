@@ -1,2 +1,2 @@
-8b6a597 2026-10-26
-Docs: hosted friend build status
+61dc617 2026-10-26
+Abilities: skip units with no ability (active_attack is the text 'nil')

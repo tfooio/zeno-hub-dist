@@ -106,7 +106,7 @@ local function mine()
         local st = u:FindFirstChild("_stats")
         local owner = st and st:FindFirstChild("player")
         local aa = st and st:FindFirstChild("active_attack")
-        if owner and owner.Value == LP and st:FindFirstChild("id") and hotbarIds[st.id.Value] and aa and aa.Value ~= nil and aa.Value ~= "" then
+        if owner and owner.Value == LP and st:FindFirstChild("id") and hotbarIds[st.id.Value] and aa and aa.Value ~= "" and aa.Value ~= "nil" then -- no ability: the game stores the text "nil"
             table.insert(out, u)
         end
     end
