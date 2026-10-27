@@ -1,2 +1,2 @@
-49d5fdc 2026-10-26
-Lobby tab: build the options in a match too (editable, jobs stay lobby-only)
+3969c79 2026-10-26
+Party farming (Joiner tab) and Gambler's Shop auto buy

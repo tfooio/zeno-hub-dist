@@ -12,6 +12,8 @@ Core.config.lobby = cfg
 local defaults = {
     claim = { quest = false, mission = false, level = false, battlepass = false },
     shop = { enable = false, items = {}, known = {} },
+    -- Gambler's Shop (the game's "MadokaShop"): items are keyed "<id>" or "<id>_<n>"; known = key -> item id.
+    gambler = { enable = false, items = {}, known = {} },
     stars = { enable = false, items = {} },
     -- done[banner] = the featured set already handled, so a rotation is summoned once (and a match is not
     -- sent back to the lobby for it again).
@@ -197,6 +199,32 @@ end
 local function count(id)
     local inv = svc().session.profile_data.inventory.normal_items
     return inv[id] or 0
+end
+
+-- Gambler's Shop -------------------------------------------------------------------------------------------
+-- Same shape as the gold shop (buy_madoka_shop_item(key, "<amount>"), left = stock - madoka_shop_data.bought_items[key])
+-- but each unit costs item_cost.amount of an inventory item (Sacred Treasure = shibuya_wheel) instead of gold.
+local function gambler()
+    local M = Game.loader().load_client_service(script, "MadokaShopServiceClient")
+    local stock = M.shop_items_for_sale
+    if not stock then return end
+    local bought = svc().session.profile_data.madoka_shop_data.bought_items or {}
+    local have = {}
+    for key, it in stock do cfg.gambler.known[key] = it.id end
+    for key, on in cfg.gambler.items do
+        local it = stock[key]
+        local cost = it and it.item_cost
+        if on and cost then
+            have[cost.item_id] = have[cost.item_id] or count(cost.item_id)
+            local n = math.min(it.stock - (bought[key] or 0), math.floor(have[cost.item_id] / cost.amount))
+            if n > 0 then
+                Core.log("lobby gambler", key, n)
+                call("buy_madoka_shop_item", key, tostring(n))
+                have[cost.item_id] -= n * cost.amount
+                task.wait(2)
+            end
+        end
+    end
 end
 local function rewardText(items, uuids)
     local t = {}
@@ -448,6 +476,7 @@ end
 if LOBBY then
     every("claim", 60, function() local c = cfg.claim return c.quest or c.mission or c.level or c.battlepass end, claim)
     every("shop", 30, function() return cfg.shop.enable end, function() shop() Core.save_config() end)
+    every("gambler", 30, function() return cfg.gambler.enable end, function() gambler() Core.save_config() end)
     every("stars", 15, function() return cfg.stars.enable end, stars)
     every("summon", 20, function() return cfg.special.enable or cfg.legacy.enable or cfg.event.enable end, summon)
     every("zoom", 5, function() return cfg.zoom end, function() LP.CameraMaxZoomDistance = cfg.zoom end)
@@ -462,25 +491,30 @@ local function buildUI()
     local function set(t, key) return function(v) t[key] = v Core.save_config() end end
 
     -- Dropdown labels: display name, with the id added when two entries share a name.
+    -- Also returns this list's own label -> id map: two lists can share a label with different ids (a star and its
+    -- Gambler's Shop key), so a dropdown must not resolve through the shared idOf.
     local function labels(ids, nameFn)
-        local seen, out = {}, {}
+        local seen, out, byName = {}, {}, {}
         for _, id in ids do local n = nameFn(id) or id seen[n] = (seen[n] or 0) + 1 end
         for _, id in ids do
             local n = nameFn(id) or id
             if seen[n] > 1 then n = ("%s [%s]"):format(n, id) end
-            nameOf[id], idOf[n] = n, id
+            nameOf[id], idOf[n], byName[n] = n, id, id
             table.insert(out, n)
         end
-        return out
+        return out, byName
     end
     local function selected(sel)
         local out = {}
         for id, on in sel do if on and nameOf[id] then table.insert(out, nameOf[id]) end end
         return out
     end
-    local function picker(t, key) return function(v)
+    local function picker(t, key, byName) return function(v)
         local o = {}
-        for name, on in v do if on and idOf[name] then o[idOf[name]] = true end end
+        for name, on in v do
+            local id = (byName or idOf)[name]
+            if on and id then o[id] = true end
+        end
         t[key] = o
         Core.save_config()
     end end
@@ -535,8 +569,21 @@ local function buildUI()
     table.sort(pool)
     local sh = T:AddLeftGroupbox("Shop", "shopping-cart")
     sh:AddToggle("LobbyShop", { Text = "Auto Gold Shop", Tooltip = "Buys only the checked items, once per shop rotation, as many as the stock and your gold allow.", Default = cfg.shop.enable, Callback = set(cfg.shop, "enable") })
-    local shopValues = labels(pool, itemName)
-    sh:AddDropdown("LobbyShopItems", { Text = "Select Buy Item", Values = shopValues, Multi = true, Default = selected(cfg.shop.items), Callback = picker(cfg.shop, "items") })
+    local shopValues, shopMap = labels(pool, itemName)
+    sh:AddDropdown("LobbyShopItems", { Text = "Select Buy Item", Values = shopValues, Multi = true, Default = selected(cfg.shop.items), Callback = picker(cfg.shop, "items", shopMap) })
+
+    -- Gambler's Shop: list = the current rotation plus every key seen before, shown by item name.
+    local gpool = {}
+    for key in cfg.gambler.known do table.insert(gpool, key) end
+    local okM, M = pcall(function() return Game.loader().load_client_service(script, "MadokaShopServiceClient") end)
+    for key, it in (okM and M.shop_items_for_sale) or {} do
+        if not cfg.gambler.known[key] then table.insert(gpool, key) cfg.gambler.known[key] = it.id end
+    end
+    table.sort(gpool)
+    local gb = T:AddLeftGroupbox("Gambler's Shop", "dices")
+    gb:AddToggle("LobbyGambler", { Text = "Auto Buy Gambler's Shop", Tooltip = "Buys the checked items once per shop rotation, as many as the stock and your Sacred Treasures allow.", Default = cfg.gambler.enable, Callback = set(cfg.gambler, "enable") })
+    local gValues, gMap = labels(gpool, function(key) local id = cfg.gambler.known[key] return Items[id] and Items[id].name end)
+    gb:AddDropdown("LobbyGamblerItems", { Text = "Select Buy Item", Values = gValues, Multi = true, Default = selected(cfg.gambler.items), Callback = picker(cfg.gambler, "items", gMap) })
 
     -- Inventory: stars
     local starIds = {}
@@ -544,7 +591,8 @@ local function buildUI()
     table.sort(starIds)
     local inv = T:AddRightGroupbox("Inventory", "package")
     inv:AddToggle("LobbyStars", { Text = "Auto Open Star (Capsule)", Tooltip = "Opens every owned star of the selected types.", Default = cfg.stars.enable, Callback = set(cfg.stars, "enable") })
-    inv:AddDropdown("LobbyStarItems", { Text = "Select Star", Values = labels(starIds, itemName), Multi = true, Default = selected(cfg.stars.items), Callback = picker(cfg.stars, "items") })
+    local starValues, starMap = labels(starIds, itemName)
+    inv:AddDropdown("LobbyStarItems", { Text = "Select Star", Values = starValues, Multi = true, Default = selected(cfg.stars.items), Callback = picker(cfg.stars, "items", starMap) })
 
     -- Auto Summon Banner
     local sb = T:AddRightGroupbox("Auto Summon Banner", "sparkles")

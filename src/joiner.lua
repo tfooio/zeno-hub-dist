@@ -197,6 +197,8 @@ local function try(mode)
     -- Pads preset by the server (challenge, daily) ignore request_start_game and start when their timer ends.
     if plan.level then
         task.wait(1)
+        -- Party farming, Host Mode: wait for the listed players to be on the pad first.
+        if Hub.Party then pcall(Hub.Party.wait_for_party, pad) end
         Game.invoke("request_start_game", pad.Name)
     end
     -- Still here after that: the start did not take; free the pad and let the next mode try.
@@ -214,6 +216,8 @@ if Hub.mode == "lobby" then
         task.wait(cfg.cooldown)
         while alive() do
             for _, mode in order() do
+                -- Party farming, Follow Host: this account joins the host's pad instead of making its own.
+                if Hub.Party and Hub.Party.following() then break end
                 if cfg[mode].enable and (backoff[mode] or 0) < os.clock() then
                     local started = try(mode)
                     if started then backoff[mode] = os.clock() + 60 break end

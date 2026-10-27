@@ -99,4 +99,7 @@ if not ok then Hub.Core.log("ERROR autoplay:", err) end
 ok, err = xpcall(function() Hub.Lobby = Hub.require("lobby") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR lobby:", err) end
 
+ok, err = xpcall(function() Hub.Party = Hub.require("party") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR party:", err) end
+
 return Hub
