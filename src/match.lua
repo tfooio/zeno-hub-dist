@@ -38,6 +38,7 @@ if Tabs then
     fin:AddToggle("AutoLobby", { Text = "Auto Return Lobby", Default = cfg.lobby, Callback = set("lobby") })
     fin:AddSlider("AutoFinishDelay", { Text = "Delay (s)", Default = cfg.finish_delay, Min = 0, Max = 30, Rounding = 0, Callback = set("finish_delay") })
     local secure = Tabs.Misc:AddLeftGroupbox("Secure", "shield")
+    Hub.SecureBox = secure -- src/misc.lua adds Walk Around here
     secure:AddToggle("AntiAfk", { Text = "Anti-AFK", Default = cfg.anti_afk, Callback = set("anti_afk") })
     secure:AddToggle("LoadFailsafe", { Text = "Loading Failsafe", Tooltip = "If the game's loading screen stays up for the time below, teleport to the lobby.", Default = cfg.load_failsafe, Callback = set("load_failsafe") })
     secure:AddSlider("LoadTimeout", { Text = "Loading Timeout (s)", Default = cfg.load_timeout, Min = 30, Max = 300, Rounding = 0, Callback = set("load_timeout") })

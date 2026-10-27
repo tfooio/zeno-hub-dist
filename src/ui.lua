@@ -6,6 +6,7 @@ local Core, Game = Hub.Core, Hub.Game
 local REPO = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library = loadstring(game:HttpGet(REPO .. "Library.lua"))()
 local SaveManager = loadstring(game:HttpGet(REPO .. "addons/SaveManager.lua"))()
+local okTM, ThemeManager = pcall(function() return loadstring(game:HttpGet(REPO .. "addons/ThemeManager.lua"))() end)
 
 local Window = Library:CreateWindow({
     Title = "Zeno Hub",
@@ -39,7 +40,6 @@ Debug:AddButton("Unload", function() Hub.unload() end)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetFolder(Core.paths.config)
-SaveManager:BuildConfigSection(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 
 local function refresh()
@@ -66,4 +66,4 @@ end)
 
 Library:OnUnload(function() Core.log("ui unloaded") end)
 
-return { Library = Library, Window = Window, Tabs = Tabs }
+return { Library = Library, Window = Window, Tabs = Tabs, ThemeManager = okTM and ThemeManager or nil }

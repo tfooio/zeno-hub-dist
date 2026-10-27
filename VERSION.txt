@@ -1,2 +1,2 @@
-3969c79 2026-10-26
-Party farming (Joiner tab) and Gambler's Shop auto buy
+0b5f1fc 2026-10-26
+Misc and Settings tabs: players-join leave, walk around, UI control, auto rejoin, ping freeze, config export/import/reset, themes

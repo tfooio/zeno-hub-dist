@@ -56,6 +56,13 @@ if qot and not env.ZenoHubQueued then
     qot("if getgenv().ZenoHubBooted then return end getgenv().ZenoHubBooted = true " .. boot)
 end
 
+-- Re-run the loader (after a config import or reset) so every module reads the new hub.json.
+function Hub.reload()
+    local src = DEV and readfile(DEV_DIR .. "loader.lua") or game:HttpGet(BASE_URL .. "loader.lua")
+    Hub.unload()
+    task.defer(function() loadstring(src)() end)
+end
+
 Hub.Core = Hub.require("core")
 Hub.Game = Hub.require("game")
 -- Dev mirror version stamp written by tools/sync.ps1 (commit, uncommitted count, sync time).
@@ -64,6 +71,7 @@ if DEV then
     local vok, v = pcall(readfile, DEV_DIR .. "VERSION.txt")
     if vok then version = v:match("%S[^%c]*") or "" end
 end
+Hub.version = version
 Hub.Core.log("loaded", Hub.mode, "place", game.PlaceId, DEV and "dev" or "hosted", version)
 
 local ok, err = pcall(function() Hub.UI = Hub.require("ui") end)
@@ -101,5 +109,8 @@ if not ok then Hub.Core.log("ERROR lobby:", err) end
 
 ok, err = xpcall(function() Hub.Party = Hub.require("party") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR party:", err) end
+
+ok, err = xpcall(function() Hub.Misc = Hub.require("misc") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR misc:", err) end
 
 return Hub
