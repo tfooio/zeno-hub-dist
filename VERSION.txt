@@ -1,2 +1,2 @@
-b7dd120 2026-10-26
-Lobby tab: claimers, gold shop, stars, auto summoners, auto sell, no summon animation
+40f4ba7 2026-10-26
+Place Anywhere: on by default

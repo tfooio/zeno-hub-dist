@@ -1,4 +1,4 @@
--- Game tab: Auto Sell Unit / Auto Sell Farm, Auto Leave, Performance (Delete Map, Boost FPS, Black Screen).
+-- Game tab: Auto Sell Unit / Auto Sell Farm, Auto Leave, Performance (Delete Map, Boost FPS, Black Screen), Place Anywhere.
 -- Options live in Core.config.game (hub.json) so they apply after every teleport.
 local Hub = ...
 local Core, Game = Hub.Core, Hub.Game
@@ -14,7 +14,7 @@ local defaults = {
     sell = { enable = false, wave = 0, types = {} },
     sell_farm = { enable = false, wave = 0, types = {} },
     leave = { enable = false, wave = 0 },
-    delete_map = false, boost_fps = false, black_screen = false, performance_mode = false,
+    delete_map = false, boost_fps = false, black_screen = false, performance_mode = false, place_anywhere = true,
     modifier = { enable = false, rank = {}, cap = {} },
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
@@ -260,6 +260,9 @@ if Tabs then
     perf:AddToggle("PerfDeleteMap", { Text = "Delete Map", Tooltip = "Hides decorative map parts and buildings; placeable ground, hills and paths stay. Off restores them.", Default = cfg.delete_map, Callback = set(cfg, "delete_map", deleteMap) })
     perf:AddToggle("PerfBoostFps", { Text = "Boost FPS", Tooltip = "Plain materials, no shadows, effects or textures. Off restores them.", Default = cfg.boost_fps, Callback = set(cfg, "boost_fps", boostFps) })
     perf:AddToggle("PerfBlackScreen", { Text = "Black Screen", Tooltip = "Turns 3D rendering off. Right-click toggles it while on.", Default = cfg.black_screen, Callback = set(cfg, "black_screen", blackScreen) })
+
+    local place = T:AddLeftGroupbox("Placement (match only)", "map-pin")
+    place:AddToggle("PlaceAnywhere", { Text = "Place Anywhere", Tooltip = "Click-place units on the road and on top of other units. A click inside a copy of the same unit is moved 0.85 studs aside (the server refuses closer). Unit cap and money still apply.", Default = cfg.place_anywhere, Callback = set(cfg, "place_anywhere") })
 end
 -- Apply saved choices after a teleport (toggle callbacks do not fire for their Default).
 if cfg.delete_map then whenMapReady(function() if cfg.delete_map then deleteMap(true) end end) end
@@ -273,6 +276,42 @@ if cfg.boost_fps or cfg.black_screen then
 end
 
 if Hub.mode ~= "match" then return Gameplay end
+
+-- Place Anywhere ----------------------------------------------------------------------------------------
+-- Road and unit overlap are only checked by the client preview (`can_place`); the server refuses just two
+-- copies of one unit closer than ~0.75 studs. A click with a ground position is forced through (docs/features/place-anywhere.md).
+local PLACE_GAP = 0.85 -- accepted at 0.8, refused at 0.7: margin on top
+-- A click inside a standing copy of the same unit (same owned uuid) is pushed out to PLACE_GAP in X/Z.
+local function nudge(pos, uuid)
+    for _ = 1, 4 do -- pushing out of one copy can land inside the next
+        local moved = false
+        for _, m in workspace._UNITS:GetChildren() do
+            local u = m:FindFirstChild("_stats") and m._stats:FindFirstChild("uuid")
+            if u and u.Value == uuid then
+                local c = m:GetPivot().Position
+                local off = Vector3.new(pos.X - c.X, 0, pos.Z - c.Z)
+                if off.Magnitude < PLACE_GAP then
+                    pos = Vector3.new(c.X, pos.Y, c.Z) + (off.Magnitude > 1e-3 and off.Unit or Vector3.xAxis) * PLACE_GAP
+                    moved = true
+                end
+            end
+        end
+        if not moved then break end
+    end
+    return pos
+end
+local okPlace, placement = pcall(Game.loader().load_client_service, script, "PlacementServiceClient")
+if okPlace and placement then
+    local origOnPlace = placement.on_place
+    placement.on_place = function(...)
+        if cfg.place_anywhere and placement.equipped_unit_uuid and placement.p then
+            placement.can_place = true
+            if typeof(placement.p) == "Vector3" then placement.p = nudge(placement.p, placement.equipped_unit_uuid) end
+        end
+        return origOnPlace(...)
+    end
+    table.insert(Hub.connections, { Disconnect = function() placement.on_place = origOnPlace end })
+end
 
 -- Sell / Leave ------------------------------------------------------------------------------------------
 local defs = Game.data("Units")
