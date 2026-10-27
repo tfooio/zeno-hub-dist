@@ -1,2 +1,2 @@
-40f4ba7 2026-10-26
-Place Anywhere: on by default
+49d5fdc 2026-10-26
+Lobby tab: build the options in a match too (editable, jobs stay lobby-only)

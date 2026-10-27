@@ -1,6 +1,6 @@
 -- Lobby tab (docs/features/lobby-tab.md): claimers, gold shop, star opening, auto summoners, codes, misc.
 -- Options live in Core.config.lobby (hub.json) so they apply after every teleport. Loops run in the lobby only;
--- in a match the module just answers Lobby.want_lobby() (used by src/match.lua at game end).
+-- in a match the tab is still built (editable, saved) and the module answers Lobby.want_lobby() (used by src/match.lua at game end).
 local Hub = ...
 local Core, Game = Hub.Core, Hub.Game
 local env = getgenv()
@@ -75,10 +75,11 @@ function Lobby.want_lobby()
     return false
 end
 
-if Hub.mode ~= "lobby" then return Lobby end
+-- Everything below that talks to the lobby (loops, summon hooks, codes) runs in the lobby only; the UI is built in both.
+local LOBBY = Hub.mode == "lobby"
 
 local s2c = RS:WaitForChild("endpoints"):WaitForChild("server_to_client")
-local stats = LP:WaitForChild("_stats")
+local stats = LOBBY and LP:WaitForChild("_stats") or LP:FindFirstChild("_stats")
 
 -- Quiet mode: the game's handlers of the reveal events are switched off (show_hatch_effect = the star and unit
 -- reveal, show_item_hatch_effect = star items, show_unit_and_item_rewards = the unit info popup; verified for
@@ -105,7 +106,7 @@ end
 table.insert(Hub.connections, { Disconnect = function() quietN = 1 quiet(false) end })
 
 -- The server answers a summon sent inside its cooldown with this red label (and no spend); hide that one only.
-do
+if LOBBY then
     local mui = Game.loader().load_client_service(script, "GUIService").message_ui
     if mui then
         local orig = mui.show_message
@@ -237,7 +238,7 @@ end
 -- Summoning -----------------------------------------------------------------------------------------------
 -- unit_added fires once per unit the server hands out (verified: one per pull).
 local got = {}
-table.insert(Hub.connections, s2c:WaitForChild("unit_added").OnClientEvent:Connect(function(u) table.insert(got, u) end))
+if LOBBY then table.insert(Hub.connections, s2c:WaitForChild("unit_added").OnClientEvent:Connect(function(u) table.insert(got, u) end)) end
 
 -- The server ignores a summon sent within 3.35 s of the last accepted one (measured: accepted calls land
 -- 3.35 s apart however often they are sent; no spend when refused), so a 10-pull is the fastest way. Wait
@@ -444,16 +445,19 @@ local function every(name, sec, enabled, fn)
         end
     end)
 end
-every("claim", 60, function() local c = cfg.claim return c.quest or c.mission or c.level or c.battlepass end, claim)
-every("shop", 30, function() return cfg.shop.enable end, function() shop() Core.save_config() end)
-every("stars", 15, function() return cfg.stars.enable end, stars)
-every("summon", 20, function() return cfg.special.enable or cfg.legacy.enable or cfg.event.enable end, summon)
-every("zoom", 5, function() return cfg.zoom end, function() LP.CameraMaxZoomDistance = cfg.zoom end)
-if cfg.codes.enable then task.spawn(function() task.wait(8) pcall(redeemCodes) end) end
+if LOBBY then
+    every("claim", 60, function() local c = cfg.claim return c.quest or c.mission or c.level or c.battlepass end, claim)
+    every("shop", 30, function() return cfg.shop.enable end, function() shop() Core.save_config() end)
+    every("stars", 15, function() return cfg.stars.enable end, stars)
+    every("summon", 20, function() return cfg.special.enable or cfg.legacy.enable or cfg.event.enable end, summon)
+    every("zoom", 5, function() return cfg.zoom end, function() LP.CameraMaxZoomDistance = cfg.zoom end)
+    if cfg.codes.enable then task.spawn(function() task.wait(8) pcall(redeemCodes) end) end
+end
 
 -- UI ------------------------------------------------------------------------------------------------------
-local Tabs = Hub.UI and Hub.UI.Tabs
-if Tabs then
+local function buildUI()
+    local Tabs = Hub.UI and Hub.UI.Tabs
+    if not Tabs then return end
     local T = Tabs.Lobby
     local function set(t, key) return function(v) t[key] = v Core.save_config() end end
 
@@ -485,10 +489,11 @@ if Tabs then
 
     -- Misc
     local misc = T:AddLeftGroupbox("Misc", "settings-2")
+    if not LOBBY then misc:AddLabel("In a match these options are only saved; the jobs run when you are in the lobby.", true) end
     misc:AddToggle("LobbyCodes", { Text = "Redeem all Codes", Tooltip = "Reads codes from videogameschronicle.com and redeems the ones not tried yet.", Default = cfg.codes.enable, Callback = function(v)
         cfg.codes.enable = v
         Core.save_config()
-        if v then task.spawn(function() pcall(redeemCodes) end) end
+        if v and LOBBY then task.spawn(function() pcall(redeemCodes) end) end
     end })
     misc:AddSlider("LobbyZoom", { Text = "Max Camera Zoom Distance", Default = math.clamp(math.floor(cfg.zoom or LP.CameraMaxZoomDistance), 10, 1000), Min = 10, Max = 1000, Rounding = 0, Callback = function(v)
         cfg.zoom = v
@@ -579,9 +584,20 @@ if Tabs then
     -- Unit lists come from the server; fill the two dropdowns once they arrive.
     task.spawn(function()
         local d
-        for _ = 1, 30 do d = hatch() if d then break end task.wait(1) end
-        if not d or not alive() then return end
+        for _ = 1, LOBBY and 30 or 5 do d = hatch() if d then break end task.wait(1) end
+        if not alive() then return end
         local Options = Hub.UI.Library.Options
+        if not d then -- the match place may not answer: at least show the units already selected
+            for key in { special = 1, legacy = 1 } do
+                local o = Options[unitOpt[key]]
+                local ids = Core.keys(cfg[key].units)
+                o:SetValues(labels(ids, unitName))
+                local v = {}
+                for _, n in selected(cfg[key].units) do v[n] = true end
+                o:SetValue(v)
+            end
+            return
+        end
         for key, pool in { special = d.special, legacy = d.legacy } do
             local o = Options[unitOpt[key]]
             o:SetValues(labels(pool.Mythic or {}, unitName))
@@ -592,5 +608,8 @@ if Tabs then
         end
     end)
 end
+-- A failure here must not take Lobby.want_lobby() (used in a match) down with it.
+local okUI, errUI = xpcall(buildUI, debug.traceback)
+if not okUI then Core.log("ERROR lobby ui", errUI) end
 
 return Lobby
