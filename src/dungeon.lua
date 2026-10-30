@@ -291,23 +291,27 @@ local function chests(d)
     end
 end
 
--- Best of the 1-3 offered rooms by the user's order; a room's score is its best flag, then the sum of its flags.
+-- Best of the 1-3 offered rooms by the user's order; a room's score is its best flag, then how many things it
+-- offers (a Chest+Shop+Hoard room beats a lone Chest; a curse is not a thing), then the sum of its flag ranks.
 local function pick(d)
     local sel = d.selected_next and d.selected_next.choice_str
     local rank, worst = {}, #cfg.rooms + 1
     for i, ty in cfg.rooms do if ty then rank[ty] = i end end
-    local best, bk, bs
+    local best, bk, bn, bs
     local seen = {}
     for c = 1, 3 do
         local room = d.next and d.next[tostring(c)]
         if room then
-            local top, sum, names = worst, 0, {}
+            local top, sum, names, good = worst, 0, {}, 0
             for ty, on in room._t or {} do
                 local r = rank[tostring(ty)] or worst
-                if on then top = math.min(top, r) sum += r table.insert(names, ROOM_LABEL[tostring(ty)] or tostring(ty)) end
+                if on then
+                    top = math.min(top, r) sum += r table.insert(names, ROOM_LABEL[tostring(ty)] or tostring(ty))
+                    if tostring(ty) ~= "0" then good += 1 end
+                end
             end
             table.insert(seen, ("%d: %s (depth %s)"):format(c, #names > 0 and table.concat(names, "+") or "plain", tostring(room._d)))
-            if not best or top < bk or (top == bk and sum < bs) then best, bk, bs = tostring(c), top, sum end
+            if not best or top < bk or (top == bk and (good > bn or (good == bn and sum < bs))) then best, bk, bn, bs = tostring(c), top, good, sum end
         end
     end
     local desc = table.concat(seen, " | ")

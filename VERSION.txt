@@ -1,2 +1,2 @@
-0b5f1fc 2026-10-26
-Misc and Settings tabs: players-join leave, walk around, UI control, auto rejoin, ping freeze, config export/import/reset, themes
+b5bfc0e 2026-10-30
+Docs: dungeon curse note (shrines trade a curse for rewards)
