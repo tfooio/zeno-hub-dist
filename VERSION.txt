@@ -1,2 +1,2 @@
-b5bfc0e 2026-10-30
-Docs: dungeon curse note (shrines trade a curse for rewards)
+fa3c28c 2026-10-31
+Dungeon: wait for the room to change after a step, retry instead of giving up

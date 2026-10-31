@@ -343,7 +343,14 @@ function Dungeon.next_room(noStart)
                 Core.log("dungeon unknown room state", dump(cur, 3))
                 if not call("dungeon_continue_shop") then backoff = os.clock() + 15 return nil, "unknown room state" end
             end
+            -- The profile updates a moment after the server accepts the call: reading it at once showed the old room
+            -- and left a run stuck in an Open Chest room at depth 10 (2026-10-31), so wait for the change.
             local nd = data()
+            for _ = 1, 12 do
+                if not (nd and sig(nd) == before) then break end
+                task.wait(0.5)
+                nd = data()
+            end
             if nd and sig(nd) == before then backoff = os.clock() + 15 return nil, "room not resolved" end
         elseif not d._started then
             if noStart then return nil, "run finished" end
@@ -428,7 +435,12 @@ if isDungeon then
         for _ = 1, 3 do
             if not alive() then return end
             local c, why = Dungeon.next_room(lastRoom)
-            if not c then Core.log("dungeon: nothing to enter:", why) break end
+            if not c then
+                Core.log("dungeon: nothing to enter:", why)
+                -- a refused or not yet visible step: try again after the cooldown instead of giving up on the run
+                if why == "room not resolved" or why == "cooling down" then task.wait(16) continue end
+                break
+            end
             Core.log("dungeon enter", c, "from match")
             Core.save_config()
             pcall(Game.invoke, "dungeon_enter_room", c)
