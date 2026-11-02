@@ -472,7 +472,7 @@ end
 -- debuffs that are okay), first so they pay out; Hard = the tuner above; Impossible = every debuff first, highest tier, for the biggest reward.
 -- A debuff the preset ignores is ranked last, so it is only picked when nothing else is offered.
 local CARD_MODES = { "Easy", "Medium", "Hard", "Impossible" }
-cfg.cardMode = table.find(CARD_MODES, cfg.cardMode) and cfg.cardMode or "Hard"
+cfg.cardMode = table.find(CARD_MODES, cfg.cardMode) and cfg.cardMode or "Easy"
 -- Enemy Health and Enemy Speed are okay up to a point (friends, user: "about 150%" for health; resist cards never). Each is capped at cfg.<cap> percent
 -- over the run. The amount is read from the offer's effects ({stat = "health" / "speed", amount = fraction}, as the enemy buff list shows health).
 -- UNVERIFIED: the offer's effects format and the speed stat name; the offers log now stores the effects, and a capped card whose amount cannot

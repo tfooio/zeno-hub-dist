@@ -1,2 +1,2 @@
-02f74fe 2026-11-02
-Summer: card presets (Easy, Medium, Hard, Impossible) with Enemy Health and Speed caps
+4b348ef 2026-11-02
+Summer: card preset defaults to Easy
