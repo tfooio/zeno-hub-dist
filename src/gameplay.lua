@@ -382,7 +382,9 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
     local titles = {}
     for slot, v in options or {} do titles[tostring(slot)] = cardOf(v.title) end
     local logPath = Core.paths.data .. "/roguelike_offers.log"
-    local line = game:GetService("HttpService"):JSONEncode({ wave = waveVal.Value, n = args.n, titles = titles }) .. "\n"
+    local effects = {}
+    for slot, v in options or {} do effects[tostring(slot)] = v.effects end -- Summer Medium preset reads the health amount from here (format unverified)
+    local line = game:GetService("HttpService"):JSONEncode({ wave = waveVal.Value, n = args.n, titles = titles, effects = effects }) .. "\n"
     pcall(function() if isfile(logPath) then appendfile(logPath, line) else writefile(logPath, line) end end) -- appendfile fails on a missing file
     if not (cfg.modifier.enable and options) then return end
     local best, bestRank
@@ -390,7 +392,7 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
         local c = cardOf(v.title)
         local cap = cfg.modifier.cap[c] or 0
         local rank = (cap > 0 and (picked[c] or 0) >= cap) and math.huge or (cfg.modifier.rank[c] or 1000)
-        local pilotRank = rank ~= math.huge and Hub.Summer and Hub.Summer.cardRank(c) -- Summer autopilot: its own card order
+        local pilotRank = rank ~= math.huge and Hub.Summer and Hub.Summer.cardRank(c, v) -- Summer autopilot: its own card order
         if pilotRank then rank = pilotRank end
         if rank ~= math.huge and Hub.Summer and Hub.Summer.avoidCard(c) then rank = 1e9 end -- Summer autopilot: no regen cards without a bleed unit
         if not bestRank or rank < bestRank then best, bestRank = slot, rank end
@@ -401,7 +403,7 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
     local ok, err = pcall(Game.invoke, "select_roguelike_option", best)
     if ok then
         picked[c] = (picked[c] or 0) + 1
-        if Hub.Summer then Hub.Summer.cardPicked(c, waveVal.Value, titles) end -- Summer run logger / card tuner
+        if Hub.Summer then Hub.Summer.cardPicked(c, waveVal.Value, titles, options[best]) end -- Summer run logger / card tuner
     end
     Core.log("auto modifier", c, "slot", tostring(best), ok and "" or tostring(err))
 end))

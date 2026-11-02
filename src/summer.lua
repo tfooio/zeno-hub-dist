@@ -468,22 +468,58 @@ end
 -- Card tuner (user, 2026-11-02: maximize currency while still clearing the stage). Debuff cards raise the pearl reward and the risk. A run takes
 -- cfg.tune.L debuff cards (the mildest first) and otherwise buffs; the run logger raises L after a win and lowers it after a loss, so it settles
 -- at the hardest setting that still wins. A card is forced when only debuffs are offered.
-local run = { cards = {}, debuffs = 0 }
-function Summer.cardRank(card)
+-- Card presets (user, from friends' advice 2026-11-02), cfg.cardMode: Easy = buffs only; Medium = also Enemy Regen and Enemy Shield (the only
+-- debuffs that are okay), first so they pay out; Hard = the tuner above; Impossible = every debuff first, highest tier, for the biggest reward.
+-- A debuff the preset ignores is ranked last, so it is only picked when nothing else is offered.
+local CARD_MODES = { "Easy", "Medium", "Hard", "Impossible" }
+cfg.cardMode = table.find(CARD_MODES, cfg.cardMode) and cfg.cardMode or "Hard"
+-- Enemy Health and Enemy Speed are okay up to a point (friends, user: "about 150%" for health; resist cards never). Each is capped at cfg.<cap> percent
+-- over the run. The amount is read from the offer's effects ({stat = "health" / "speed", amount = fraction}, as the enemy buff list shows health).
+-- UNVERIFIED: the offer's effects format and the speed stat name; the offers log now stores the effects, and a capped card whose amount cannot
+-- be read is logged (and then taken without a cap).
+local OKAY_DEBUFFS = { ["Enemy Regen"] = true, ["Enemy Shield"] = true, ["Enemy Health"] = true, ["Enemy Speed"] = true }
+local CAPPED = { ["Enemy Health"] = { stat = "health", cap = "hpCap" }, ["Enemy Speed"] = { stat = "speed", cap = "speedCap" } }
+cfg.hpCap = tonumber(cfg.hpCap) or 150
+cfg.speedCap = tonumber(cfg.speedCap) or 50 -- guess, no number from the user yet
+local run = { cards = {}, debuffs = 0, total = {} } -- total[card] = percent taken so far this run
+local function amountOf(opt, stat) -- percent a card adds, nil when the offer carries no readable amount
+    local sum
+    for _, e in type(opt) == "table" and type(opt.effects) == "table" and opt.effects or {} do
+        if type(e) == "table" and e.stat == stat and tonumber(e.amount) then sum = (sum or 0) + e.amount * 100 end
+    end
+    return sum
+end
+function Summer.cardRank(card, opt)
     if not pilotOn() then return nil end
     local base, tier = parseCard(card)
     for i, n in DEBUFF_ORDER do
-        if base == n then return (run.debuffs < cfg.tune.L and 50 or 500) + i * 10 + tier end
+        if base == n then
+            local mode = cfg.cardMode
+            if mode == "Impossible" then return 50 + i * 10 + (4 - tier) end
+            if mode == "Medium" then
+                local okay = OKAY_DEBUFFS[n]
+                local capped = CAPPED[n]
+                if okay and capped then
+                    local pct = amountOf(opt, capped.stat)
+                    if not pct then Core.log("summer: " .. n .. " card without a readable amount, cap not applied") end
+                    if pct and (run.total[n] or 0) + pct > cfg[capped.cap] then okay = false end
+                end
+                return (okay and 50 or 500) + i * 10 + (4 - tier)
+            end
+            if mode == "Easy" then return 500 + i * 10 + tier end
+            return (run.debuffs < cfg.tune.L and 50 or 500) + i * 10 + tier
+        end
     end
     for i, n in BUFF_ORDER do if base == n then return 100 + i * 10 + (4 - tier) end end -- a higher tier of a buff first
     return 300 -- weather and other special cards
 end
 
-function Summer.cardPicked(card, wave, offered)
+function Summer.cardPicked(card, wave, offered, opt)
     if not pilotOn() then return end
     table.insert(run.cards, { wave = wave, card = card, offered = offered })
     local base = parseCard(card)
     if table.find(DEBUFF_ORDER, base) then run.debuffs += 1 end
+    if CAPPED[base] then run.total[base] = (run.total[base] or 0) + (amountOf(opt, CAPPED[base].stat) or 0) end
 end
 
 local bleedOnHotbar
@@ -529,7 +565,7 @@ if not LOBBY then
         local line = HttpService:JSONEncode(rec) .. "\n"
         pcall(function() if isfile(path) then appendfile(path, line) else writefile(path, line) end end)
         -- Tuner: L follows the result; two losses in a row at a weather switch it to the Vegito pair, four wins in a row there try the boost team again.
-        cfg.tune.L = victory and math.min(cfg.tune.L + 1, 8) or math.max(cfg.tune.L - 1, 0)
+        if cfg.cardMode == "Hard" then cfg.tune.L = victory and math.min(cfg.tune.L + 1, 8) or math.max(cfg.tune.L - 1, 0) end -- other presets are fixed
         if victory then
             cfg.losses[w] = 0
             cfg.wins = cfg.wins or {}
@@ -541,7 +577,7 @@ if not LOBBY then
             if cfg.losses[w] >= 2 then cfg.needVegito[w] = true end
         end
         Core.log(("summer: run %s %s %s waves %s debuff cards %d -> tuner L %d%s"):format(tostring(w), rec.map, victory and "WIN" or "loss", tostring(rec.waves), run.debuffs, cfg.tune.L, cfg.needVegito[w] and " (Vegito pair needed)" or ""))
-        run = { cards = {}, debuffs = 0 }
+        run = { cards = {}, debuffs = 0, total = {} }
         Core.save_config()
     end) })
 end
@@ -574,6 +610,9 @@ if Tabs then
     if not LOBBY then hunt_box:AddLabel("Works in the lobby only (saved here).", true) end
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather, joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
+    hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
+    hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
+    hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })
     local status = hunt_box:AddLabel("Weather: -", true)
     local plan = hunt_box:AddLabel("Plan: -", true)
     if LOBBY then

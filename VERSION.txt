@@ -1,2 +1,2 @@
-60d1b45 2026-11-02
-UI kit: visual rank lists for the Joiner priority and the Game modifier priority
+02f74fe 2026-11-02
+Summer: card presets (Easy, Medium, Hard, Impossible) with Enemy Health and Speed caps
