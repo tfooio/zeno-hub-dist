@@ -8,12 +8,23 @@ local Library = loadstring(game:HttpGet(REPO .. "Library.lua"))()
 local SaveManager = loadstring(game:HttpGet(REPO .. "addons/SaveManager.lua"))()
 local okTM, ThemeManager = pcall(function() return loadstring(game:HttpGet(REPO .. "addons/ThemeManager.lua"))() end)
 
+-- Soft dark + pink look. A theme the user saved as default (Settings > Themes) still overrides these.
+Library.Scheme.BackgroundColor = Color3.fromRGB(16, 16, 24)
+Library.Scheme.MainColor = Color3.fromRGB(26, 26, 38)
+Library.Scheme.OutlineColor = Color3.fromRGB(46, 46, 64)
+Library.Scheme.AccentColor = Color3.fromRGB(240, 143, 181)
+
 local Window = Library:CreateWindow({
     Title = "Zeno Hub",
     Footer = "Anime Adventures | " .. Hub.mode .. (Hub.dev and " | dev" or ""),
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
+    Size = UDim2.fromOffset(820, 560),
+    CornerRadius = 12,
+    Font = Enum.Font.GothamMedium,
+    TabButtonsStyle = { Gap = 2, Padding = 6, CornerRadius = 8, Indicator = false, IndicatorWidth = 2, IndicatorHeight = 20 },
+    Animations = { ToggleWindow = false, TabSwitch = true, Groupbox = false, Dropdown = true, KeyPicker = false },
 })
 
 -- Same tabs and order as Nousigi (docs/roadmap.md); sections are added by the modules that own them.
@@ -25,6 +36,8 @@ local Tabs = {
     DungeonInfo = Window:AddTab("Dungeon Info", "book-open"),
     Game = Window:AddTab("Game", "swords"),
     AutoPlay = Window:AddTab("Auto Play", "bot"),
+    -- Inf Range stays hidden until a run shows it extends reach (src/infrange.lua skips its UI without this tab).
+    -- InfRange = Window:AddTab("Inf Range", "move"),
     Macro = Window:AddTab("Macro", "play"),
     Webhook = Window:AddTab("Webhook", "webhook"),
     Misc = Window:AddTab("Misc", "ellipsis"),

@@ -241,19 +241,34 @@ if Tabs then
 
     local mod = T:AddRightGroupbox("Auto Modifier", "layers")
     mod:AddToggle("ModAuto", { Text = "Auto Select Modifier", Tooltip = "Pick the offered modifier with the best priority (lowest number) that is under its cap.", Default = cfg.modifier.enable, Callback = set(cfg.modifier, "enable") })
-    local rankSliders = {}
+    local prio = T:AddRightGroupbox("Modifier Priority", "list-ordered")
+    prio:AddLabel("The first card is picked first. - N + is the most picks per run (0 = no limit).", true)
+    local CARD_ICONS = { { "Yen", "coins" }, { "Active Cooldown", "timer-reset" }, { "Cooldown", "timer" }, { "Boss", "skull" }, { "Blessings", "sparkles" }, { "Shield", "shield" },
+        { "Explosive", "bomb" }, { "Curses", "ghost" }, { "Health", "heart" }, { "Speed", "gauge" }, { "Regen", "heart-pulse" }, { "Double", "zap" }, { "Attack", "swords" },
+        { "Range", "crosshair" }, { "New Path", "route" } }
+    local function cardIcon(c) for _, p in CARD_ICONS do if c:find(p[1], 1, true) then return p[2] end end end
+    local items = {}
+    for _, c in CARDS do items[#items + 1] = { key = c, text = c, icon = cardIcon(c) } end
+    local list
+    list = Hub.UIKit.rankList(Hub.UI.Library, prio, "ModPriorityList", {
+        items = items,
+        get = function()
+            local keys = table.clone(CARDS)
+            table.sort(keys, function(a, b)
+                local ra, rb = cfg.modifier.rank[a] or 1000, cfg.modifier.rank[b] or 1000
+                if ra ~= rb then return ra < rb end
+                return table.find(CARDS, a) < table.find(CARDS, b)
+            end)
+            return keys
+        end,
+        set = function(keys) for i, c in keys do cfg.modifier.rank[c] = i end Core.save_config() end,
+        counter = { min = 0, max = 10, get = function(c) return cfg.modifier.cap[c] or 0 end, set = function(c, v) cfg.modifier.cap[c] = v Core.save_config() end },
+    })
     mod:AddButton("Reset Modifier Priority", function()
-        for i, c in CARDS do rankSliders[c]:SetValue(i) end
+        for i, c in CARDS do cfg.modifier.rank[c] = i end
+        Core.save_config()
+        list.refresh()
     end)
-    local prio = T:AddRightGroupbox("Modifier Priority (1 = first)", "list-ordered")
-    for _, c in CARDS do
-        rankSliders[c] = prio:AddSlider("ModRank_" .. c:gsub("%W", "_"), { Text = c, Default = cfg.modifier.rank[c], Min = 1, Max = #CARDS, Rounding = 0, Callback = function(v) cfg.modifier.rank[c] = v Core.save_config() end })
-    end
-    local caps = T:AddRightGroupbox("Modifier Cap-Amount", "hash")
-    caps:AddLabel("Most picks per run for each card. 0 = no limit.", true)
-    for _, c in CARDS do
-        caps:AddSlider("ModCap_" .. c:gsub("%W", "_"), { Text = c, Default = cfg.modifier.cap[c], Min = 0, Max = 10, Rounding = 0, Callback = function(v) cfg.modifier.cap[c] = v Core.save_config() end })
-    end
 
     local perf = T:AddRightGroupbox("Performance (match only)", "gauge")
     perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Omega optimizer: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })

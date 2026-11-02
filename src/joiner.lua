@@ -18,6 +18,7 @@ local defaults = {
     mansion = { enable = false, hard = false },
     portal = { enable = false, portals = {} },
     relics = { enable = false },
+    team = {}, -- mode key -> team slot "1".."6" loaded before that joiner starts (Team Equipper)
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
@@ -26,10 +27,18 @@ local function alive() return env.ZenoHub == Hub end
 
 local Worlds, Levels = Game.data("Worlds"), Game.data("Levels")
 local function prog() return Game.loader().load_core_service(script, "ProgressionServiceCore") end
--- check_if_unlocked_* take profile_data.level_data (verified 2026-10-23).
+-- Summer update (2026-11-02): both take (session, Levels[id], ...). The old calls passed profile.level_data and an id
+-- string (a string has no .id), so every level read as locked and the World / Legend joiners never joined.
+local function session()
+    local ok, svc = pcall(Game.loader().load_client_service, script, "LobbyServiceClient")
+    return ok and svc and svc.session or nil
+end
 local function unlocked(levelId)
-    local pd = Game.profile()
-    local ok, res = pcall(prog().check_if_unlocked_level, pd and pd.level_data, levelId)
+    local ok, res = pcall(prog().check_if_unlocked_level, session(), Levels[levelId])
+    return ok and res == true
+end
+local function hardUnlocked(levelId)
+    local ok, res = pcall(prog().check_if_unlocked_difficulty, session(), Levels[levelId], "Hard")
     return ok and res == true
 end
 
@@ -130,10 +139,8 @@ function modes.world()
     local diff = "Normal"
     -- Infinite is Hard only (the game's picker hides Normal for it; Normal is refused).
     if (Levels[lv] and Levels[lv].infinite) or lv:find("_infinite$") then diff = "Hard"
-    elseif w.hard then
-        local pd = Game.profile()
-        local ok, res = pcall(prog().check_if_unlocked_difficulty, pd and pd.level_data, lv, "Hard")
-        if ok and res then diff = "Hard" end
+    elseif w.hard and hardUnlocked(lv) then
+        diff = "Hard"
     end
     return { folder = workspace._LOBBIES.Story, level = lv, diff = diff }
 end
@@ -220,11 +227,47 @@ local function order()
 end
 local backoff = {} -- mode -> os.clock() before which it is not retried
 
+-- Team Equipper: load the mode's team slot (load_team_loadout "<slot>", the Teams screen's Load button) unless the hotbar
+-- already holds exactly that team. The server drops a call sent right after another, so check the profile and retry once.
+local function teamMatches(slot)
+    local pd = Game.profile()
+    local l = pd and pd.loadouts_v2 and pd.loadouts_v2[slot]
+    if not (l and l.saved_equipped and next(l.saved_equipped)) then return nil end -- nothing saved in that slot
+    local have, nHave, nWant = {}, 0, 0
+    for _, uuid in pd.collection.equipped_units do have[uuid] = true nHave += 1 end
+    for _, uuid in l.saved_equipped do
+        -- A saved slot can point at a unit that is gone (sold / fused); the server skips it, so do we.
+        if pd.collection.owned_units[uuid] then
+            nWant += 1
+            if not have[uuid] then return false end
+        end
+    end
+    if nWant == 0 then return nil end
+    return nWant == nHave
+end
+local function equipTeam(mode)
+    local slot = cfg.team[mode]
+    if not slot then return end
+    local m = teamMatches(slot)
+    if m == nil then return Core.log("joiner: team slot", slot, "is empty, keeping the hotbar", mode) end
+    if m then return end
+    for _ = 1, 2 do
+        Core.log("joiner: equip team", slot, "for", mode)
+        pcall(Game.invoke, "load_team_loadout", slot)
+        for _ = 1, 12 do
+            task.wait(0.5)
+            if teamMatches(slot) ~= false then return end
+        end
+    end
+    Core.log("joiner: team", slot, "not fully equipped, joining anyway", mode)
+end
+
 local function try(mode)
     local ok, plan, why = pcall(modes[mode])
     if not ok then Core.log("ERROR joiner", mode, plan) return false end
     if not plan then return false, why end
     if plan.direct then
+        equipTeam(mode)
         Core.log("joiner", mode, table.unpack(plan.direct, 2))
         Core.save_config()
         local ok2, err = pcall(Game.invoke, table.unpack(plan.direct))
@@ -238,6 +281,7 @@ local function try(mode)
         local pad = ownPortalPad()
         if not pad then
             if not freePad(workspace._PORTALS.Lobbies) then return false, "no free pad" end
+            equipTeam(mode)
             Core.log("joiner", mode, plan.name)
             Game.invoke("use_portal", plan.portal, { friends_only = true })
             for _ = 1, 20 do pad = ownPortalPad() if pad then break end task.wait(0.25) end
@@ -255,6 +299,7 @@ local function try(mode)
     end
     local pad = freePad(plan.folder)
     if not pad then return false, "no free pad" end
+    equipTeam(mode)
     Core.log("joiner", mode, plan.level or pad.Level.Value, plan.diff or "", pad.Name)
     if Game.invoke("request_join_lobby", pad.Name) ~= true then Core.log("joiner: join refused", mode, pad.Name) return false end
     if plan.level and Game.invoke("request_lock_level", pad.Name, plan.level, true, plan.diff) ~= true then
@@ -309,10 +354,31 @@ if Tabs then
 
     local setting = T:AddLeftGroupbox("Auto Join Setting", "settings-2")
     setting:AddSlider("JoinCooldown", { Text = "Joiner Cooldown (second)", Tooltip = "Wait in the lobby before joining.", Default = cfg.cooldown, Min = 0, Max = 60, Rounding = 0, Callback = set(cfg, "cooldown") })
-    setting:AddLabel("Priority: when several joiners are on, the first available one in this order is joined.", true)
-    for i = 1, #MODE_NAMES do
-        setting:AddDropdown("JoinPriority" .. i, { Text = "Priority " .. i, Values = MODE_NAMES, Default = cfg.order[i], AllowNull = true, Callback = function(v)
-            cfg.order[i] = v or false -- false keeps the list's length; order() skips it
+    setting:AddLabel("Priority: when several joiners are on, the first available one in this order is joined. Use the arrows to move a mode.", true)
+    local MODE_ICONS = { World = "globe", Legend = "crown", Raid = "swords", ["Infinity Mansion"] = "castle", Challenge = "trophy", ["Daily Challenge"] = "calendar-check",
+        Portal = "orbit", ["Dungeon Run"] = "skull", ["Relic Farm"] = "gem" }
+    local items = {}
+    for _, n in MODE_NAMES do items[#items + 1] = { key = n, text = n, icon = MODE_ICONS[n] } end
+    Hub.UIKit.rankList(Hub.UI.Library, setting, "JoinPriorityList", {
+        items = items,
+        get = function() return cfg.order end,
+        set = function(keys) for i, k in keys do cfg.order[i] = k end Core.save_config() end,
+    })
+
+    -- Team Equipper: one team slot per joiner, named as on the in-game Teams screen.
+    local team = T:AddLeftGroupbox("Team Equipper", "users")
+    team:AddLabel("Loads the chosen team slot right before that joiner starts. None keeps your hotbar.", true)
+    local pd = Game.profile()
+    local teamValues = { "None" }
+    for i = 1, Game.data("GameplaySettings").NUM_TEAM_SLOTS or 6 do
+        local l = pd and pd.loadouts_v2 and pd.loadouts_v2[tostring(i)]
+        table.insert(teamValues, l and l.name and l.name ~= "" and ("%d - %s"):format(i, l.name) or ("Team " .. i))
+    end
+    for _, n in MODE_NAMES do
+        local key = MODES[n]
+        local cur = cfg.team[key]
+        team:AddDropdown("JoinTeam" .. key, { Text = n .. " Team", Values = teamValues, Default = cur and teamValues[tonumber(cur) + 1] or "None", Callback = function(v)
+            cfg.team[key] = v and v ~= "None" and v:match("%d+") or nil
             Core.save_config()
         end })
     end

@@ -77,6 +77,9 @@ Hub.Core.log("loaded", Hub.mode, "place", game.PlaceId, DEV and "dev" or "hosted
 local ok, err = pcall(function() Hub.UI = Hub.require("ui") end)
 if not ok then Hub.Core.log("ERROR ui:", err) end
 
+ok, err = pcall(function() Hub.UIKit = Hub.require("uikit") end)
+if not ok then Hub.Core.log("ERROR uikit:", err) end
+
 ok, err = pcall(function() Hub.RunLog = Hub.require("runlog") end)
 if not ok then Hub.Core.log("ERROR runlog:", err) end
 
@@ -111,6 +114,9 @@ if not ok then Hub.Core.log("ERROR abilities:", err) end
 
 ok, err = xpcall(function() Hub.AutoPlay = Hub.require("autoplay") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR autoplay:", err) end
+
+ok, err = xpcall(function() Hub.InfRange = Hub.require("infrange") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR infrange:", err) end
 
 ok, err = xpcall(function() Hub.Lobby = Hub.require("lobby") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR lobby:", err) end

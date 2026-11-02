@@ -131,6 +131,26 @@ local function allMaps()
     table.sort(out)
     return out
 end
+-- Portals: a fixed-level portal (Divine Treasure ...) is keyed by its item name, so two portals on one map get their own
+-- macro; rolled portals (most of them, their level id differs per copy) share one macro per map name.
+local portalByLevel = {}
+for _, d in Game.data("Items") do
+    if d.item_group == "Portals" and d.usage and d.usage.level_id and not d._unique_portal and not d.static_portal_copy_to_level_params then
+        portalByLevel[d.usage.level_id] = d.name
+    end
+end
+local function portalKeys()
+    local out = {}
+    for _, name in portalByLevel do if not table.find(out, name) then table.insert(out, name) end end
+    for _, l in Game.data("Levels") do
+        if l._portal_only_level or l.portal_group or l.override_portal then
+            local name = Maps[l.map or ""] and Maps[l.map].name or l._location_name
+            if name and not table.find(out, name) then table.insert(out, name) end
+        end
+    end
+    table.sort(out)
+    return out
+end
 -- shortcut: Infinity Mansion and Daily list every map (no pool data found); narrow if the lists get unwieldy.
 local SECTIONS = {
     { mode = "Story", maps = worldNames("story") },
@@ -139,6 +159,7 @@ local SECTIONS = {
     { mode = "Infinity Mansion", maps = allMaps() },
     { mode = "Challenge", maps = worldNames("story") },
     { mode = "Daily Challenge", maps = allMaps() },
+    { mode = "Portal", maps = portalKeys() },
 }
 cfg.stage = cfg.stage or {}
 for _, sec in SECTIONS do cfg.stage[sec.mode] = cfg.stage[sec.mode] or {} end
@@ -146,6 +167,7 @@ for _, sec in SECTIONS do cfg.stage[sec.mode] = cfg.stage[sec.mode] or {} end
 -- Mode + map of a match (Game.stage); Infinite story stages use the Story section.
 local function stageOf(ld)
     local mode, map = Game.stage(ld)
+    if mode == "Portal" and portalByLevel[ld.id] then map = portalByLevel[ld.id] end
     return mode == "Infinite" and "Story" or mode, map
 end
 Macro.stageOf = stageOf

@@ -1,2 +1,2 @@
-70bcdea 2026-11-02
-Portal joiner: Auto Join Portal, and pick the next portal at match end
+60d1b45 2026-11-02
+UI kit: visual rank lists for the Joiner priority and the Game modifier priority

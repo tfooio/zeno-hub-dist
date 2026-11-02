@@ -17,12 +17,18 @@ local defaults = {
     enable = false, upgrade = false, upgrade_place = false, focus_farm = false, opening = true, fuse = true,
     order = six(function(i) return i end), wave = six(function() return 0 end), limit = six(function() return 0 end),
     ulimit = six(function() return 0 end), uorder = six(function(i) return i end), uwave = six(function() return 0 end),
-    method = METHODS[1], priority = PRIOS[1], boss_priority = PRIOS[1], mode_preset = {},
+    method = METHODS[1], upgrade_one = false, priority = PRIOS[1], boss_priority = PRIOS[1], mode_preset = {},
     distance = 50, ground = 60, hill = 80, margin = 0.3, pack = true,
     kind = {}, mid = {}, slotpos = {}, -- per stage key
     learned = {}, use_learned = true, -- per map: learned[map][slot] = { {x, y, z}, ... }
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
+-- Place order: Script = hotbar order, Custom = cfg.order. Someone who already moved a number keeps their order (Custom).
+if cfg.place_custom == nil then
+    cfg.place_custom = false
+    for i = 1, 6 do if cfg.order[i] ~= i then cfg.place_custom = true end end
+end
+local function placeOrd(slot) return cfg.place_custom and cfg.order[slot] or slot end
 -- Stage types used to be stored under the Nousigi names.
 for key, v in cfg.kind do if v == "Middle Position" then cfg.kind[key] = "My saved position" elseif v == "Path (auto)" then cfg.kind[key] = nil end end
 -- v2: the default upgrade method became Smart; the old default was never a deliberate choice.
@@ -115,21 +121,112 @@ if Tabs then
     ui.status = main:AddLabel("Status: -", true)
     ui.slots = main:AddLabel("Slots: -", true)
 
-    -- Per unit: one tab per setting, six sliders each.
+    -- Per unit: a strip of the six hotbar portraits (clones of the game's own hotbar viewports); click one to edit its limits.
+    local units = Game.data("Units")
+    local sel, loading = 1, false
+    local sliders, cells, shown, lastEq = {}, {}, "", {}
+    local strip = Tabs.AutoPlay:AddLeftGroupbox("Units", "users")
+    local picked = strip:AddLabel("Unit 1", true)
+    local function new(class, props, parent)
+        local o = Instance.new(class)
+        for k, v in props do o[k] = v end
+        o.Parent = parent
+        return o
+    end
+    local holder = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
+    new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 5), VerticalAlignment = Enum.VerticalAlignment.Center }, holder)
+    for i = 1, 6 do
+        local b = new("TextButton", { Size = UDim2.new(1 / 6, -5, 1, 0), Text = "", AutoButtonColor = false, ClipsDescendants = true, LayoutOrder = i, BackgroundColor3 = lib.Scheme.MainColor })
+        new("UICorner", { CornerRadius = UDim.new(0, 10) }, b)
+        new("UIAspectRatioConstraint", { AspectType = Enum.AspectType.FitWithinMaxSize, DominantAxis = Enum.DominantAxis.Width }, b)
+        local line = new("UIStroke", { Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
+        new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(4, 2), Text = tostring(i), ZIndex = 5,
+            TextColor3 = Color3.new(1, 1, 1), TextSize = 13, FontFace = lib.Scheme.Font, TextXAlignment = Enum.TextXAlignment.Left, TextStrokeTransparency = 0.4 }, b)
+        b.Parent = holder
+        cells[i] = { btn = b, line = line }
+        b.MouseButton1Click:Connect(function() AutoPlay.selectSlot(i) end)
+    end
+    strip:AddUIPassthrough("AP_UnitStrip", { Instance = holder, Height = 62 })
+
+    local function equipped()
+        local ok, col = pcall(function()
+            if Hub.mode == "match" then return Game.loader().load_client_service(script, "GUIService").session.collection.collection_profile_data end
+            return Game.profile().collection
+        end)
+        local out = {}
+        if ok and col then
+            for i = 1, 6 do
+                local uuid = col.equipped_units[i] or col.equipped_units[tostring(i)]
+                local u = uuid and col.owned_units[uuid]
+                out[i] = u and u.unit_id
+            end
+        end
+        return out
+    end
+    local function unitName(i, eq) local d = eq[i] and units[eq[i]] return d and d.name or "empty" end
+    local function paint(eq)
+        for i, c in cells do c.line.Color = i == sel and lib.Scheme.AccentColor or lib.Scheme.OutlineColor end
+        picked:SetText(("Unit %d: %s"):format(sel, unitName(sel, eq or equipped())))
+    end
+    local function portraits(eq)
+        local hb = LP:FindFirstChild("PlayerGui") and LP.PlayerGui:FindFirstChild("spawn_units")
+        hb = hb and hb:FindFirstChild("Lives") and hb.Lives.Frame.Units
+        for i, c in cells do
+            local old = c.btn:FindFirstChild("Portrait")
+            if old then old:Destroy() end
+            local src = hb and hb:FindFirstChild(tostring(i)) and hb[tostring(i)].Main:FindFirstChild("View")
+            if src and eq[i] then
+                local v = src:Clone()
+                for _, k in v:GetChildren() do if k:IsA("UIScale") or k:IsA("UIAspectRatioConstraint") then k:Destroy() end end
+                v.Name, v.Size, v.Position, v.AnchorPoint, v.BackgroundTransparency, v.ZIndex, v.Visible = "Portrait", UDim2.fromScale(1, 1), UDim2.new(), Vector2.zero, 1, 2, true
+                v.Parent = c.btn
+            end
+        end
+    end
+    function AutoPlay.selectSlot(i)
+        sel = i
+        loading = true
+        for field, s in sliders do s:SetValue(cfg[field][i]) end
+        loading = false
+        paint()
+    end
+    -- The hotbar changes when the team does (Teams / Team Equipper): rebuild the portraits when the six ids differ.
+    task.spawn(function()
+        while not lib.Unloaded do
+            local ok, err = pcall(function()
+                local eq = equipped()
+                local sig = table.concat({ eq[1] or "-", eq[2] or "-", eq[3] or "-", eq[4] or "-", eq[5] or "-", eq[6] or "-" }, ",")
+                if sig ~= shown then
+                    shown, lastEq = sig, eq
+                    portraits(eq)
+                    paint(eq)
+                    if AutoPlay.refreshLists then AutoPlay.refreshLists() end
+                end
+            end)
+            if not ok then Core.log("ERROR autoplay strip:", err) task.wait(10) end
+            task.wait(2)
+        end
+    end)
+
+    local function perUnit(box, field, title, min, max)
+        sliders[field] = box:AddSlider("AP_" .. field, { Text = title, Default = cfg[field][1], Min = min, Max = max, Rounding = 0,
+            Callback = function(v)
+                if loading then return end
+                cfg[field][sel] = v
+                Core.save_config()
+                if AutoPlay.refreshLists then AutoPlay.refreshLists() end
+            end })
+    end
     local per = Tabs.AutoPlay:AddLeftTabbox()
     local t1 = per:AddTab("Caps")
     t1:AddLabel("Place Cap: copies to place. 0 = as many as allowed, -1 = leave this slot out.", true)
-    perSlot(t1, "limit", "Place Cap", -1, 10)
+    perUnit(t1, "limit", "Place Cap", -1, 10)
     t1:AddLabel("Upgrade Cap: level to stop at. 0 = maximum, -1 = after the other units, -2 = never.", true)
-    perSlot(t1, "ulimit", "Upgrade Cap", -2, 12)
+    perUnit(t1, "ulimit", "Upgrade Cap", -2, 12)
     local t2 = per:AddTab("Waves")
     t2:AddLabel("Wave a unit starts being placed or upgraded. 0 = from the start.", true)
-    perSlot(t2, "wave", "Place on Wave", 0, 60)
-    perSlot(t2, "uwave", "Upgrade on Wave", 0, 60)
-    local t3 = per:AddTab("Order")
-    t3:AddLabel("Who goes first when money is short (lower number first, equal = hotbar order).", true)
-    perSlot(t3, "order", "Place Order", 1, 6)
-    perSlot(t3, "uorder", "Upgrade Order", 1, 6)
+    perUnit(t2, "wave", "Place on Wave", 0, 60)
+    perUnit(t2, "uwave", "Upgrade on Wave", 0, 60)
 
     -- Everything else, grouped by purpose.
     local adv = Tabs.AutoPlay:AddRightTabbox()
@@ -140,7 +237,10 @@ if Tabs then
     a1:AddToggle("AutoPlayOpening", { Text = "Smart Opening", Tooltip = "When your first unit is too expensive, place farm units first instead of waiting.", Default = cfg.opening, Callback = set("opening") })
     a1:AddToggle("AutoPlayUpgradePlace", { Text = "Upgrade Between Placements", Tooltip = "One upgrade after every placement. Off: place everything first, then upgrade.", Default = cfg.upgrade_place, Callback = set("upgrade_place") })
     a1:AddToggle("AutoPlayFuse", { Text = "Auto Fuse Vegito", Tooltip = "With Carrot (Ultra) and Vego (Mage II) both on the hotbar: upgrades them only to level 7, casts the fusion on the better one (stat potentials, level, relic), then upgrades the Fused Hero to its maximum.", Default = cfg.fuse, Callback = set("fuse") })
-    a1:AddDropdown("AP_Method", { Text = "Upgrade Method", Tooltip = "Cheapest first = buys any upgrade it can afford, farm units first, then the cheapest (never waits on an expensive one). The others: Smart = most damage per yen, or hotbar order, your own order, or the lowest level first. Upgrade Cap always applies.", Values = METHODS, Default = cfg.method, Callback = set("method") })
+    a1:AddDropdown("AP_Method", { Text = "Upgrade Method", Tooltip = "Cheapest first = buys any upgrade it can afford, farm units first, then the cheapest (never waits on an expensive one). The others: Smart = most damage per yen, or hotbar order, your own order, or the lowest level first. Upgrade Cap always applies.", Values = METHODS, Default = cfg.method, Callback = set("method", function(v)
+        if v ~= METHODS[4] then cfg.method_script = v end -- what Script mode in the Upgrade Order list returns to
+        if AutoPlay.refreshLists then AutoPlay.refreshLists() end
+    end) })
 
     local a2 = adv:AddTab("Position")
     ui.stage = a2:AddLabel("Stage: join a match", true)
@@ -190,6 +290,125 @@ if Tabs then
     local a4 = adv:AddTab("Target")
     a4:AddDropdown("AP_Priority", { Text = "Target Priority", Tooltip = "Who your units shoot at. Game default leaves it alone.", Values = PRIOS, Default = cfg.priority, Callback = set("priority") })
     a4:AddDropdown("AP_BossPriority", { Text = "Boss Target Priority", Tooltip = "Used while the stage's boss is alive. Game default = no change.", Values = PRIOS, Default = cfg.boss_priority, Callback = set("boss_priority") })
+
+    -- Order lists: Script = the hub decides, Custom = your order. Use / Skip leaves a unit in or out, the arrows move it.
+    local lists = {}
+    local S = lib.Scheme
+    local function ranked(field)
+        local s = { 1, 2, 3, 4, 5, 6 }
+        table.sort(s, function(a, b)
+            if cfg[field][a] ~= cfg[field][b] then return cfg[field][a] < cfg[field][b] end
+            return a < b
+        end)
+        return s
+    end
+    local function syncSlider(field, slot)
+        if slot ~= sel or not sliders[field] then return end
+        loading = true
+        sliders[field]:SetValue(cfg[field][slot])
+        loading = false
+    end
+    local function arrow(icon, fallback, x, parent)
+        local props = { Size = UDim2.fromOffset(22, 22), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0) }
+        local ic = lib:GetIcon(icon)
+        local b
+        if ic then
+            props.ImageColor3 = S.FontColor
+            b = lib:CreateIcon(ic, props, true)
+        else
+            props.Text, props.TextSize, props.BackgroundTransparency, props.TextColor3, props.FontFace = fallback, 14, 1, S.FontColor, S.Font
+            b = new("TextButton", props)
+        end
+        b.Parent = parent
+        return b
+    end
+    local USE, SKIP = { Color3.fromRGB(34, 72, 54), Color3.fromRGB(120, 230, 160) }, { Color3.fromRGB(78, 38, 48), Color3.fromRGB(240, 120, 130) }
+    local function makeList(title, icon, def)
+        local box = Tabs.AutoPlay:AddRightGroupbox(title, icon)
+        box:AddLabel(def.hint, true)
+        if def.extra then def.extra(box) end
+        local frame = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
+        new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, frame)
+        local L, rows, segBtn = {}, {}, {}
+        local seg = new("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = S.MainColor, LayoutOrder = 0 }, frame)
+        new("UICorner", { CornerRadius = UDim.new(0, 8) }, seg)
+        for n, name in { "Script", "Custom" } do
+            local b = new("TextButton", { Size = UDim2.new(0.5, -4, 1, -6), Position = UDim2.new((n - 1) * 0.5, n == 1 and 3 or 1, 0, 3), Text = name,
+                AutoButtonColor = false, TextSize = 14, FontFace = S.Font, BorderSizePixel = 0 }, seg)
+            new("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
+            b.MouseButton1Click:Connect(function() def.setCustom(n == 2) L.refresh() end)
+            segBtn[n] = b
+        end
+        local function move(k, dir)
+            if not def.isCustom() or not rows[k + dir] then return end
+            local s = ranked(def.field)
+            for rank, slot in s do cfg[def.field][slot] = rank end -- ties become a strict order first
+            cfg[def.field][s[k]], cfg[def.field][s[k + dir]] = k + dir, k
+            Core.save_config()
+            L.refresh()
+        end
+        for k = 1, 6 do
+            local r = { k = k }
+            r.frame = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = S.MainColor, LayoutOrder = k }, frame)
+            new("UICorner", { CornerRadius = UDim.new(0, 8) }, r.frame)
+            r.num = new("TextLabel", { Size = UDim2.fromOffset(22, 22), Position = UDim2.new(0, 6, 0.5, -11), BackgroundColor3 = S.OutlineColor, TextColor3 = S.FontColor, TextSize = 13, FontFace = S.Font }, r.frame)
+            new("UICorner", { CornerRadius = UDim.new(0, 6) }, r.num)
+            r.name = new("TextLabel", { Position = UDim2.fromOffset(36, 0), Size = UDim2.new(1, -144, 1, 0), BackgroundTransparency = 1, TextColor3 = S.FontColor, TextSize = 14,
+                FontFace = S.Font, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd }, r.frame)
+            r.pill = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -58, 0.5, 0), Size = UDim2.fromOffset(46, 22), AutoButtonColor = false,
+                TextSize = 13, FontFace = S.Font, BorderSizePixel = 0 }, r.frame)
+            new("UICorner", { CornerRadius = UDim.new(0, 6) }, r.pill)
+            r.up, r.down = arrow("chevron-up", "^", -30, r.frame), arrow("chevron-down", "v", -6, r.frame)
+            r.pill.MouseButton1Click:Connect(function() def.toggle(r.slot) L.refresh() end)
+            r.up.MouseButton1Click:Connect(function() move(r.k, -1) end)
+            r.down.MouseButton1Click:Connect(function() move(r.k, 1) end)
+            rows[k] = r
+        end
+        function L.refresh()
+            local custom = def.isCustom()
+            for n, b in segBtn do
+                local on = (n == 2) == custom
+                b.BackgroundTransparency, b.BackgroundColor3, b.TextColor3 = on and 0 or 1, S.AccentColor, on and S.BackgroundColor or S.FontColor
+            end
+            for k, slot in custom and ranked(def.field) or { 1, 2, 3, 4, 5, 6 } do
+                local r, skip = rows[k], def.skipped(slot)
+                local d = lastEq[slot] and units[lastEq[slot]]
+                r.slot = slot
+                r.name.Text = d and d.name or ("Slot " .. slot)
+                r.name.TextTransparency = (skip or not d) and 0.55 or 0
+                r.num.Text = tostring(custom and k or slot)
+                r.pill.Text = skip and "Skip" or "Use"
+                r.pill.BackgroundColor3, r.pill.TextColor3 = unpack(skip and SKIP or USE)
+                r.up.Visible, r.down.Visible = custom and k > 1, custom and k < 6
+            end
+        end
+        box:AddUIPassthrough("AP_" .. def.field .. "_list", { Instance = frame, Height = 244 })
+        table.insert(lists, L)
+    end
+    makeList("Place Order", "list-ordered", {
+        field = "order", hint = "Script = hotbar order (farm units first when Focus Farm is on). Custom = your order. Skip leaves the unit out.",
+        isCustom = function() return cfg.place_custom end,
+        setCustom = function(v) cfg.place_custom = v Core.save_config() end,
+        skipped = function(slot) return cfg.limit[slot] == -1 end,
+        toggle = function(slot) cfg.limit[slot] = cfg.limit[slot] == -1 and 0 or -1 Core.save_config() syncSlider("limit", slot) end,
+    })
+    makeList("Upgrade Order", "arrow-up-narrow-wide", {
+        field = "uorder", hint = "Script = the Upgrade Method (Behavior tab) decides. Custom = your order. Skip never upgrades the unit.",
+        extra = function(box)
+            box:AddToggle("AP_UpgradeOne", { Text = "One at a time", Default = cfg.upgrade_one, Callback = set("upgrade_one"),
+                Tooltip = "Custom order only. On: the first unit in the list is upgraded first and the hub waits for the money, never moving on. Off: buys the first affordable unit in your order, so cheaper units further down still get upgraded while it saves up." })
+        end,
+        isCustom = function() return cfg.method == METHODS[4] end,
+        setCustom = function(v)
+            local m = v and METHODS[4] or (cfg.method_script ~= METHODS[4] and cfg.method_script or METHODS[1])
+            lib.Options.AP_Method:SetValue(m) -- the dropdown writes cfg.method and refreshes the lists
+        end,
+        skipped = function(slot) return cfg.ulimit[slot] == -2 end,
+        toggle = function(slot) cfg.ulimit[slot] = cfg.ulimit[slot] == -2 and 0 or -2 Core.save_config() syncSlider("ulimit", slot) end,
+    })
+    function AutoPlay.refreshLists() for _, L in lists do L.refresh() end end
+    lastEq = equipped()
+    AutoPlay.refreshLists()
 end
 
 function AutoPlay.refreshLabels()
@@ -909,7 +1128,7 @@ local function eligible(units)
     table.sort(list, function(a, b)
         local fa, fb = cfg.focus_farm and a.farm, cfg.focus_farm and b.farm
         if fa ~= fb then return fa end
-        if cfg.order[a.slot] ~= cfg.order[b.slot] then return cfg.order[a.slot] < cfg.order[b.slot] end
+        if placeOrd(a.slot) ~= placeOrd(b.slot) then return placeOrd(a.slot) < placeOrd(b.slot) end
         return a.slot < b.slot
     end)
     return list, count
@@ -1023,6 +1242,10 @@ local function pickUpgrade(list, money, rate)
     local first = list[1]
     if not first or money >= first.cost then return first end
     if first.prio and (first.cost - money) / rate <= 20 then return first end -- save up for the fusion path instead of buying cheaper units first
+    if cfg.method == METHODS[4] then -- Custom order: One at a time waits for the first unit, otherwise the first affordable in the list's order
+        if not cfg.upgrade_one then for _, e in list do if money >= e.cost then return e end end end
+        return first
+    end
     if cfg.method == METHODS[1] then -- anything affordable, in the list's order (farms first, then the cheapest)
         for _, e in list do if money >= e.cost then return e end end
         return first
@@ -1104,7 +1327,7 @@ local function planSpots(units)
     table.sort(list, function(a, b)
         local fa, fb = cfg.focus_farm and a.farm, cfg.focus_farm and b.farm
         if fa ~= fb then return fa end
-        if cfg.order[a.slot] ~= cfg.order[b.slot] then return cfg.order[a.slot] < cfg.order[b.slot] end
+        if placeOrd(a.slot) ~= placeOrd(b.slot) then return placeOrd(a.slot) < placeOrd(b.slot) end
         return a.slot < b.slot
     end)
     local virtual, spots = {}, {}
