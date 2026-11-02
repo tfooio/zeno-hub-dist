@@ -1,2 +1,2 @@
-4b348ef 2026-11-02
-Summer: card preset defaults to Easy
+4b18c66 2026-11-02
+Summer: team is Bulby, Rukia, a bleed unit and two carries; max placements; Double Cooldown card always last

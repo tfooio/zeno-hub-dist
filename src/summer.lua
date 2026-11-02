@@ -67,7 +67,7 @@ for id in ("rohan_evolved daki daki_evolved denji denji_evolved denji_secret hid
     "ban ban_evolved guts guts_berserker hange hange_evolved juuzou juuzou_evolved levi levi_evolved osaragi osaragi_evolved pitou pitou_evolved " ..
     "stain stain_evolved sukuna unohana nobara kaneki_2 nezuko"):gmatch("%S+") do BLEED_UNITS[id] = true end
 local SLOW_FIRST = { "rukia_bankai_evolved", "rukia_bankai", "rukia" } -- user: Rukia is the first choice for slow
-local BULBY, CEO, CARROT, VEGO = "bulma", "speedwagon", "goku_ssj3_evolved", "vegeta_majin_evolved"
+local BULBY, CARROT, VEGO = "bulma", "goku_ssj3_evolved", "vegeta_majin_evolved"
 
 local familyBuffs = {}
 for id, a in Attacks do
@@ -124,7 +124,7 @@ local function weatherFactor(w, r)
     return 1
 end
 
--- Returns { Bulby, CEO, slow / bleed unit, DPS 1, DPS 2, buffer } as unit ids ("" = nothing), and a text for the log.
+-- Returns { Bulby, Rukia, bleed unit, DPS 1, DPS 2, buffer } as unit ids ("" = nothing), and a text for the log.
 function Summer.plan(w, owned)
     owned = owned or profile().collection.owned_units
     local cands = {}
@@ -167,18 +167,14 @@ function Summer.plan(w, owned)
 
     local team, notes = { "", "", "", "", "", "" }, {}
     team[1] = take(cands[BULBY]) and BULBY or ""
-    team[2] = take(cands[CEO]) and CEO or ""
 
-    -- Support slot: slow (Rukia first) or bleed.
-    local sup
-    if w == "fire" then -- Inferno: enemies ignore slows and stuns
-        sup = best(function(c) return c.r.bleed and usable(c) end)
-    else
-        -- Rukia is the only slow unit (user): no other slow unit is ever chosen; without her the slot falls to a bleed unit, then a third carry.
-        for _, id in SLOW_FIRST do if cands[id] and not used[id] and usable(cands[id]) then sup = cands[id] break end end
-        sup = sup or best(function(c) return c.r.bleed and usable(c) end)
+    -- Support slots (user, 2026-11-02: no C.E.O., money is not a problem): Rukia in slot 2 and a bleed unit in slot 3, every weather. Rukia is the
+    -- only slow unit; a missing one falls back to a damage dealer below.
+    for _, id in SLOW_FIRST do
+        if cands[id] and not used[id] and usable(cands[id]) then team[2] = take(cands[id]).id break end
     end
-    if sup then team[3] = take(sup).id end
+    local bleeder = take(best(function(c) return c.r.bleed and usable(c) end))
+    if bleeder then team[3] = bleeder.id end
 
     -- DPS: the carries with the most pearl bonus (see carry); Blizzard needs a fire unit. The Vegito pair is used only for a weather that could not be
     -- cleared without it (cfg.needVegito, set by the run logger after two losses in a row there; user: currency first unless the stage is not beatable).
@@ -196,9 +192,11 @@ function Summer.plan(w, owned)
     end
     if d1 then team[4] = d1.id end
     if d2 then team[5] = d2.id end
-    if team[3] == "" then -- no slow or bleed unit: a third damage dealer
-        local d3 = take(carry(function(c) return dps(c) and usable(c) end))
-        if d3 then team[3] = d3.id end
+    for _, slot in { 2, 3 } do -- no Rukia / no bleed unit owned: a damage dealer instead
+        if team[slot] == "" then
+            local d3 = take(carry(function(c) return dps(c) and usable(c) end))
+            if d3 then team[slot] = d3.id end
+        end
     end
 
     -- Buffer follows the damage type of the two carries (Commander: physical, Elfy / Windsong: magic).
@@ -425,7 +423,7 @@ end
 -- Autopilot -------------------------------------------------------------------------------------------------------
 -- Inside a Hunt started with Auto Summer Hunt on, Auto Play and the ability module run on these settings instead of the saved ones
 -- (nothing from the saved Auto Play config is read, nothing is saved). Rules (user, 2026-11-01): farms are placed first and upgraded as soon
--- as the money is there, before any other unit is placed; Rukia placed 3 and upgraded once; a bleed unit placed once and never upgraded;
+-- as the money is there, before any other unit is placed; Rukia and the bleed unit placed to their cap and upgraded once the carries are done;
 -- buffers placed at most 4 times and never upgraded; the carries by damage per yen (Auto Fuse stops Carrot and Vego at 7, casts, then
 -- puts the money into Vegito first). Which unit is in a slot is read from the hotbar when the setting is first asked.
 local function slotUnit(slot)
@@ -441,11 +439,9 @@ local function rule(slot) -- place cap, upgrade cap (Auto Play: 0 = as many / ma
     local r = Summer.role(id)
     if r.farm then return 0, 0 end
     if r.buffer then return 4, -2 end -- placed at most 4 times, never upgraded (user)
-    if id ~= CARROT and id ~= VEGO and slot == 3 then
-        if table.find(SLOW_FIRST, id) then return 3, -1 end -- Rukia: 3 copies, upgraded once the carries are done
-        if r.bleed then return 1, -1 end
-    end
-    if slot == 3 then return 0, -1 end -- anything else in the support slot is upgraded after the carries too
+    -- user, 2026-11-02: every unit but the buffers gets its most placements (Somber / Osaragi, a bleed unit, caps at 4 itself); the support
+    -- slots (2 Rukia, 3 bleed unit) are upgraded once the carries are done
+    if slot == 2 or slot == 3 then return 0, -1 end
     return 0, 0
 end
 
@@ -491,6 +487,9 @@ local function amountOf(opt, stat) -- percent a card adds, nil when the offer ca
 end
 function Summer.cardRank(card, opt)
     if not pilotOn() then return nil end
+    -- "Double Attack, Double Cooldown" doubles ability cooldowns too and breaks the Auto Commander / Rukia chains (user): last in every preset, picked
+    -- only when it is the whole offer. (The "- Cooldown" cards are the other way round: they cut cooldowns.)
+    if tostring(card):find("Double Cooldown", 1, true) then return 2e9 end
     local base, tier = parseCard(card)
     for i, n in DEBUFF_ORDER do
         if base == n then
@@ -588,7 +587,7 @@ function Summer.pilot(defaults, methods)
     o.enable, o.upgrade, o.upgrade_place, o.focus_farm, o.opening, o.fuse = true, true, false, true, true, true
     o.method = methods[2] -- most damage per yen (farms and the fusion pair still come first, see upgradeList)
     -- Placement order (user: everything placed as soon as possible, only the farms first): farms, then the two carries, the buffer, the support unit last.
-    o.order = { 1, 2, 6, 3, 4, 5 }
+    o.order = { 1, 6, 2, 3, 4, 5 }
     o.kind, o.mid, o.slotpos, o.mode_preset = {}, {}, {}, {}
     o.limit = setmetatable({}, { __index = function(_, slot) return (rule(slot)) end })
     o.ulimit = setmetatable({}, { __index = function(_, slot) return select(2, rule(slot)) end })
