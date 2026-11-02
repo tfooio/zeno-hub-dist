@@ -24,6 +24,14 @@ if cfg.smart_units == nil then
     cfg.smart_units = {}
     for _, id in SMART_ORDER do cfg.smart_units[id] = true end
 end
+-- Summer Hunt started by Auto Summer Hunt: its own settings (src/summer.lua), the saved ones are not read or written.
+do
+    local ok, ov = pcall(function() return Hub.Summer and Hub.Summer.pilotAbility(SMART_ORDER) end)
+    if ok and ov then
+        ov.gap = cfg.gap
+        cfg = ov
+    end
+end
 local function smartOn(id) return cfg.smart == true and cfg.smart_units[id] == true end
 
 local defs = Game.data("Units")
@@ -106,7 +114,7 @@ local function mine()
         local st = u:FindFirstChild("_stats")
         local owner = st and st:FindFirstChild("player")
         local aa = st and st:FindFirstChild("active_attack")
-        if owner and owner.Value == LP and st:FindFirstChild("id") and hotbarIds[st.id.Value] and aa and aa.Value ~= "" and aa.Value ~= "nil" then -- no ability: the game stores the text "nil"
+        if owner and owner.Value == LP and st:FindFirstChild("id") and hotbarIds[st.id.Value] and aa and aa.Value ~= "" and aa.Value ~= "nil" and not (Core.config.autoplay and Core.config.autoplay.fuse and tostring(aa.Value):find("fusion")) then -- no ability: the game stores the text "nil"; the fusion is Auto Play's (Auto Fuse picks the unit)
             table.insert(out, u)
         end
     end
@@ -144,7 +152,13 @@ local function cast(u, why)
     local ok, res = pcall(Game.invoke, "use_active_attack", u)
     if not ok or res ~= true then
         failedAt[u] = os.clock()
-        Core.log("ability", u._stats.id.Value, why, "->", tostring(res))
+        -- what the unit looked like when the server said no (cooldown stat, time since its last cast, active buffs), to find why
+        local st, on = u._stats, {}
+        for _, b in u:FindFirstChild("_buffs") and u._buffs:GetChildren() or {} do
+            if b:IsA("ValueBase") and b.Name ~= "damage_buff__magic" and b.Name ~= "damage_buff__physical" and tonumber(b.Value) and b.Value ~= 0 then table.insert(on, b.Name) end
+        end
+        local last, q = st:FindFirstChild("last_active_cast"), st:FindFirstChild("active_queued_or_using")
+        Core.log("ability", st.id.Value, why, "->", tostring(res), ("cd %.2f since %.1f queued %s buffs %s"):format(cooldown(u), last and tick() - last.Value or -1, tostring(q and q.Value), table.concat(on, ",")))
         return false
     end
     return true
@@ -188,7 +202,98 @@ end
 
 -- Buff chain per unit id: 4 copies, pair casts 2 s apart, second pair 30 s after the first; the next cycle
 -- starts one period (max cooldown of the 4, at least 60 s) after the first cast. Waits for readiness.
-local OFFSETS = { 0, 2, 30, 32 }
+-- Cast offsets (s after the chain's first cast), chosen for the live cooldown. The fixed 0 / 2 / 30 / 32 only works at
+-- a 60 s cooldown. With a +SPA% curse (63.46 s seen live 2026-11-02) the second pair lands after the first pair's buffs
+-- expired, so its first caster casts bare every cycle and the chain never climbs past 25% / 56% (reconstructed from the
+-- buff_on events: tools/erwin-sim/analyze_run.py). This is the model's choice (tools/erwin-sim/margin.py, choose.py):
+-- the best of a candidate grid by average damage-dealer buff, ranked again under the expiry quirk margin (a cast within
+-- EPS of a target's expiry does not renew it) and +-0.3 s of timing jitter. Cooldowns up to 60.5 s keep the schedule
+-- proven live.
+local PROVEN = { 0, 2, 30, 32 }
+local BUFF_BASE, JITTER = 0.25, 0.3
+local function uptimeOf(offs, cd, eps)
+    local periods = 12
+    local casts = {}
+    for k = 0, periods - 1 do for i = 1, 4 do casts[#casts + 1] = { offs[i] + cd * k, i } end end
+    table.sort(casts, function(a, b) if a[1] ~= b[1] then return a[1] < b[1] end return a[2] < b[2] end)
+    local tier, exp, dpsExp, segs = {}, {}, nil, {}
+    for _, c in casts do
+        local t, i = c[1], c[2]
+        local mine = (exp[i] and exp[i] > t) and tier[i] or 0
+        for j = 1, 4 do
+            if j ~= i and not (exp[j] and exp[j] + eps > t) then tier[j], exp[j] = mine + 1, t + BUFF_LEN end
+        end
+        if not (dpsExp and dpsExp + eps > t) then
+            dpsExp = t + BUFF_LEN
+            table.insert(segs, { t, t + BUFF_LEN, math.min(1, (1 + BUFF_BASE) ^ (mine + 1) - 1) })
+        end
+    end
+    local a, z, sum = (periods - 4) * cd, (periods - 1) * cd, 0
+    for _, s in segs do sum += math.max(0, math.min(z, s[2]) - math.max(a, s[1])) * s[3] end
+    return sum / (z - a)
+end
+local function robustScore(offs, cd)
+    local tot, n = 0, 0
+    for _, eps in { 0, 0.3, 0.6 } do
+        tot += uptimeOf(offs, cd, eps) n += 1
+        for k = 2, 4 do
+            for _, d in { -JITTER, JITTER } do
+                local o = { table.unpack(offs) }
+                o[k] += d
+                tot += uptimeOf(o, cd, eps) n += 1
+            end
+        end
+    end
+    return tot / n
+end
+local function computePlan(cd)
+    local cands, n = {}, 0
+    local o4max = math.floor((math.min(cd + 8, 75) - 26) / 0.5)
+    for _, o2 in { 1.5, 2, 3, 4, 6 } do
+        for k3 = 0, 23 do
+            for k4 = 0, o4max do
+                local offs = { 0, o2, 29.5 + 0.5 * k3, 26 + 0.5 * k4 }
+                table.insert(cands, { uptimeOf(offs, cd, 0.3), offs })
+                n += 1
+                if n % 400 == 0 then task.wait() end -- ~1 s in total: do not hold a frame
+            end
+        end
+    end
+    table.sort(cands, function(a, b)
+        if a[1] ~= b[1] then return a[1] > b[1] end
+        for k = 2, 4 do if a[2][k] ~= b[2][k] then return a[2][k] > b[2][k] end end
+        return false
+    end)
+    local best, bestScore
+    for i = 1, math.min(60, #cands) do
+        local sc = robustScore(cands[i][2], cd)
+        if not bestScore or sc > bestScore then best, bestScore = cands[i][2], sc end
+        task.wait()
+    end
+    table.sort(best) -- the copies are interchangeable: slots in time order
+    return best, bestScore
+end
+local plans = {} -- cooldown in 0.01 s -> offsets, or false while it is being computed
+-- Offsets for a cooldown; nil while the plan is still being computed (the caller waits a pass).
+local function planFor(cd)
+    if cd <= 60.5 then return PROVEN end
+    local key = math.floor(cd * 100 + 0.5)
+    local p = plans[key]
+    if p == nil then
+        plans[key] = false
+        task.spawn(function()
+            local ok, offs, score = pcall(computePlan, key / 100)
+            if ok then
+                plans[key] = offs
+                Core.log("buff chain plan", ("cooldown %.2f"):format(key / 100), "offsets", table.concat(offs, " / "), ("model %.1f%%"):format(score * 100))
+            else
+                plans[key] = PROVEN
+                Core.log("ERROR buff chain plan", offs)
+            end
+        end)
+    end
+    return p or nil
+end
 local chains = {} -- id -> { units = {4}, key, step, anchor }
 local function runChain(id, units)
     -- Hold until 4 copies (Nousigi too): early base casts lock targets on a weak buff for 30 s (user, 2026-10-23).
@@ -207,6 +312,10 @@ local function runChain(id, units)
         -- late would otherwise stay late every cycle.
         -- One time per copy, taken once: a comparator that reads the clock is inconsistent for copies that
         -- are all ready now (fresh, never cast) and makes table.sort throw "invalid order function".
+        local cdMax = 60
+        for _, u in four do cdMax = math.max(cdMax, cooldown(u)) end
+        local offs = planFor(cdMax)
+        if not offs then return end -- schedule for this cooldown is still being computed: next pass
         local now = os.clock()
         local at = {}
         for _, u in four do
@@ -215,19 +324,36 @@ local function runChain(id, units)
         end
         table.sort(four, function(a, b) return at[a] < at[b] end)
         local anchor = now
-        for i, u in four do anchor = math.max(anchor, at[u] - OFFSETS[i]) end
-        c = { units = four, key = key, step = 1, anchor = anchor }
+        for i, u in four do anchor = math.max(anchor, at[u] - offs[i]) end
+        c = { units = four, key = key, step = 1, anchor = anchor, offs = offs, cd = cdMax }
         chains[id] = c
-        Core.log("buff chain", id, ("starts in %.1fs"):format(anchor - now))
+        Core.log("buff chain", id, ("starts in %.1fs"):format(anchor - now), "offsets", table.concat(offs, " / "), ("cooldown %.2f"):format(cdMax))
     end
     local u = c.units[c.step]
-    local due = c.anchor and c.anchor + OFFSETS[c.step] or 0
-    if os.clock() >= due and ready(u) and not holdForExpiry(u, c.units) and cast(u, "chain " .. c.step) then
+    local due = c.anchor and c.anchor + c.offs[c.step] or 0
+    local done = false
+    if os.clock() >= due and ready(u) and not holdForExpiry(u, c.units) then
+        done = cast(u, "chain " .. c.step)
+        if not done then -- refused (or still blocked from a refusal): a later copy that is ready takes this slot
+            for j = c.step + 1, 4 do
+                local o = c.units[j]
+                if ready(o) and cast(o, "chain " .. c.step .. " (swap)") then
+                    c.units[c.step], c.units[j], done = o, u, true
+                    break
+                end
+            end
+        end
+    end
+    if done then
         if c.step == 1 then c.anchor = os.clock() end -- offsets count from the real first cast
         c.step += 1
         if c.step > 4 then
             local period = 60
             for _, m in c.units do period = math.max(period, cooldown(m)) end
+            if math.abs(period - c.cd) > 0.25 then -- cooldown changed (curse, upgrade): re-plan when ready
+                local o = planFor(period)
+                if o then c.offs, c.cd = o, period end
+            end
             c.step, c.anchor = 1, c.anchor + period -- next cycle's first cast is due one period later
         end
     end
@@ -258,8 +384,16 @@ end
 
 -- Meter rotation (toggle abilities with a draining bar, e.g. Snow Reaper): one on at a time while enemies
 -- are in range; when its bar is low, turn on the fullest idle one, then the low one off. Tested 2026-10-23.
+-- Measured live 2026-11-02 (3 copies, `unit_bar`): drain about 5/s while on, refill about 2.5/s while off, and a refill pause of about 3 s after a bar hits 0.
+-- With 12 / 30 (kept: measured 92% on over 200 s with enemies always in range, the gaps being handoffs that wait for a bar of 30). A try at 8 / 4
+-- to close those gaps was not validated (its test window was dominated by a round restart), so it is not used. UNVERIFIED: whether lower
+-- thresholds reach more than 92%; the rates (drain 5/s, refill 2.5/s) make 100% a zero-slack case for 3 copies.
+-- The meter stat is `unit_bar` since the Summer 2026 update (was rukia_bankai_active_bar). With the old name only, every bar read as 100 and the
+-- rotation never switched: one copy flickered on and off at an empty bar while two full copies sat idle (seen live 2026-11-02).
 local SWITCH_AT, MIN_START, PRESS_CD = 12, 30, 4.2
 local function barOf(u)
+    local bar = u._stats:FindFirstChild("unit_bar")
+    if bar then return bar.Value end
     for _, c in u._stats:GetChildren() do if c.Name:find("_active_bar$") then return c.Value end end
     return 100
 end

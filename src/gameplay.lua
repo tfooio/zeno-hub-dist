@@ -375,13 +375,19 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
         local c = cardOf(v.title)
         local cap = cfg.modifier.cap[c] or 0
         local rank = (cap > 0 and (picked[c] or 0) >= cap) and math.huge or (cfg.modifier.rank[c] or 1000)
+        local pilotRank = rank ~= math.huge and Hub.Summer and Hub.Summer.cardRank(c) -- Summer autopilot: its own card order
+        if pilotRank then rank = pilotRank end
+        if rank ~= math.huge and Hub.Summer and Hub.Summer.avoidCard(c) then rank = 1e9 end -- Summer autopilot: no regen cards without a bleed unit
         if not bestRank or rank < bestRank then best, bestRank = slot, rank end
     end
     if best == nil then return end
     local c = cardOf(options[best].title)
     task.wait(0.5) -- let the game finish opening its own choice UI
     local ok, err = pcall(Game.invoke, "select_roguelike_option", best)
-    if ok then picked[c] = (picked[c] or 0) + 1 end
+    if ok then
+        picked[c] = (picked[c] or 0) + 1
+        if Hub.Summer then Hub.Summer.cardPicked(c, waveVal.Value, titles) end -- Summer run logger / card tuner
+    end
     Core.log("auto modifier", c, "slot", tostring(best), ok and "" or tostring(err))
 end))
 

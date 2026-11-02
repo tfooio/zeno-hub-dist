@@ -625,5 +625,11 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage"):WaitForChild(
         if recording then Macro.record(false) if options.record then options.record:SetValue(false) end end
     end))
 if cfg.play then Macro.start() end
+-- Seamless replay (Summer 2026) restarts the match in place: play the macro again when GameFinished drops.
+task.spawn(function()
+    local data = workspace:WaitForChild("_DATA", 30)
+    local gf = data and data:WaitForChild("GameFinished", 10)
+    if gf then table.insert(Hub.connections, gf.Changed:Connect(function(v) if not v and cfg.play then Macro.start() end end)) end
+end)
 
 return Macro

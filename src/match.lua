@@ -102,14 +102,29 @@ function Match.finish_chain(victory)
         local ok, want = pcall(Hub.Lobby.want_lobby)
         if ok and want then return { { "teleport_back_to_lobby" } } end
     end
+    -- Relic Farm: a farm run ends in the lobby, where the inventory is read and the next stage chosen.
+    if Hub.Relics and Hub.Relics.want_lobby() then return { { "teleport_back_to_lobby" } } end
+    -- Summer Hunt: the hour changed, so the next weather may need another team (src/summer.lua).
+    if Hub.Summer and Hub.Summer.want_lobby() then return { { "teleport_back_to_lobby" } } end
     local chain = {}
     local function check(fn)
         local ok, res = pcall(fn, victory)
         if not ok then Core.log("ERROR finish check:", res) end
         return ok and res
     end
+    -- Auto Summer Hunt: replay, and the lobby when that is refused, regardless of the Next / Replay / Lobby toggles.
+    if Hub.Summer and Hub.Summer.piloting() then
+        if check(can_replay) then table.insert(chain, { "set_game_finished_vote", "replay" }) end
+        table.insert(chain, { "teleport_back_to_lobby" })
+        return chain
+    end
     if cfg.next and check(can_next) then table.insert(chain, { "set_game_finished_vote", "next_story" }) end
     if cfg.replay and check(can_replay) then table.insert(chain, { "set_game_finished_vote", "replay" }) end
+    -- Portals: the game's end screen asks you to pick the next portal ("Pick Next Portal"); the Joiner's Select Portal list does that.
+    if cfg.replay and Hub.Joiner then
+        local ok, uuid = pcall(Hub.Joiner.next_portal)
+        if ok and uuid then table.insert(chain, { "set_game_finished_vote", "replay", { item_uuid = uuid } }) end
+    end
     if cfg.lobby then table.insert(chain, { "teleport_back_to_lobby" }) end
     return chain
 end
@@ -129,11 +144,17 @@ table.insert(Hub.connections, s2c:WaitForChild("game_finished").OnClientEvent:Co
         cfg.runs = (cfg.runs or 0) + 1
         Core.save_config()
         -- A call that does not teleport within 15 s falls through to the next one.
+        local gf = workspace:FindFirstChild("_DATA") and workspace._DATA:FindFirstChild("GameFinished")
         for _, a in chain do
             if not alive() then return end
             Core.log("finish", a[1], a[2] or "", "run", cfg.runs)
+            local was = gf and gf.Value
             call(table.unpack(a))
-            task.wait(15)
+            for _ = 1, 15 do
+                task.wait(1)
+                -- Seamless replay (Summer 2026): the match restarts in place, so GameFinished drops; do not fall through.
+                if was and not gf.Value then return Core.log("finish: match restarted in place") end
+            end
         end
     end)
 end))
@@ -161,7 +182,9 @@ local function setGameSkip(on)
 end
 if cfg.wave_skip and not skipStopped() then task.spawn(setGameSkip, true) end
 table.insert(Hub.connections, workspace:WaitForChild("_wave_num").Changed:Connect(function()
-    if cfg.wave_skip and skipStopped() then setGameSkip(false) end
+    if cfg.wave_skip and skipStopped() then setGameSkip(false)
+    -- Seamless replay restarts the wave counter in place; the stop wave turned the setting off, so turn it back on.
+    elseif cfg.wave_skip and sentSkip == false and workspace._wave_num.Value <= 1 then setGameSkip(true) end
 end))
 table.insert(Hub.connections, s2c:WaitForChild("start_vote_wave_skip").OnClientEvent:Connect(function()
     if cfg.wave_skip and not skipStopped() then call("vote_wave_skip") end
@@ -173,8 +196,9 @@ task.spawn(function()
     local data = workspace:WaitForChild("_DATA", 30)
     local vf = data and data:WaitForChild("VoteStart", 10)
     vf = vf and vf:WaitForChild("VotingFinished", 10)
-    while alive() and vf and not vf.Value do
-        if cfg.vote_start then pcall(Game.invoke, "vote_start") end
+    -- Keeps running after voting ends: a seamless replay resets VotingFinished in the same match.
+    while alive() and vf do
+        if cfg.vote_start and not vf.Value then pcall(Game.invoke, "vote_start") end
         task.wait(2)
     end
 end)

@@ -95,6 +95,14 @@ if not ok then Hub.Core.log("ERROR dungeon:", err) end
 ok, err = xpcall(function() Hub.Joiner = Hub.require("joiner") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR joiner:", err) end
 
+-- Skins before Summer: its Hunt loop calls Hub.Skins on its first pass (a nil there cost 40 s per lobby visit overnight).
+ok, err = xpcall(function() Hub.Skins = Hub.require("skins") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR skins:", err) end
+
+-- Before Abilities and AutoPlay: they ask Hub.Summer for the autopilot settings while they load.
+ok, err = xpcall(function() Hub.Summer = Hub.require("summer") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR summer:", err) end
+
 ok, err = xpcall(function() Hub.Gameplay = Hub.require("gameplay") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR gameplay:", err) end
 
@@ -106,6 +114,9 @@ if not ok then Hub.Core.log("ERROR autoplay:", err) end
 
 ok, err = xpcall(function() Hub.Lobby = Hub.require("lobby") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR lobby:", err) end
+
+ok, err = xpcall(function() Hub.Relics = Hub.require("relics") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR relics:", err) end
 
 ok, err = xpcall(function() Hub.Party = Hub.require("party") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR party:", err) end

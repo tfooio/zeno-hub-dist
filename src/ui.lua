@@ -20,6 +20,7 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Lobby = Window:AddTab("Lobby", "house"),
     Joiner = Window:AddTab("Joiner", "door-open"),
+    Summer = Window:AddTab("Summer", "sun"),
     Dungeon = Window:AddTab("Dungeon", "skull"),
     DungeonInfo = Window:AddTab("Dungeon Info", "book-open"),
     Game = Window:AddTab("Game", "swords"),

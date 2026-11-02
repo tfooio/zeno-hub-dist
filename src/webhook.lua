@@ -78,7 +78,8 @@ local STAGE = { story = "Story", raid = "Raid", challenge = "Challenge", infinit
 -- Remnant totals (user, 2026-10-26): "(Total: N)" next to what a match or chest run gave. The lobby reads the real count
 -- from the profile (profile_data.inventory.normal_items); a match has no profile, so the last lobby reading is kept in
 -- Data/totals_<user>.json and each match's drops are added to it. Unknown total = no suffix, never a guess.
-local TRACK = { star_remnant = true, star_remnant_limited = true }
+local TRACK = { star_remnant = true, star_remnant_limited = true, SummerPearls = true }
+local RESOURCE = { SummerPearls = true } -- kept in profile_data.resources (user, 2026-11-02), not inventory.normal_items
 local totalsFile = Core.paths.data .. "/totals_" .. game:GetService("Players").LocalPlayer.Name .. ".json"
 local totals = {}
 do
@@ -86,13 +87,23 @@ do
     if ok and type(d) == "table" then for id in TRACK do if type(d[id]) == "number" then totals[id] = d[id] end end end
 end
 local function saveTotals() pcall(writefile, totalsFile, HttpService:JSONEncode(totals)) end
-local function readProfileTotals()
+-- The lobby profile; in a match the unit service holds the same profile_data (seen live 2026-11-02).
+local function profileData()
     local pd = Game.profile()
+    if pd then return pd end
+    local ok, svc = pcall(Game.loader().load_client_service, script, "UnitServiceClient")
+    return ok and svc and svc.session and svc.session.profile_data or nil
+end
+local function readProfileTotals()
+    local pd = profileData()
     local items = pd and pd.inventory and pd.inventory.normal_items
-    if type(items) ~= "table" then return false end
+    local res = pd and pd.resources
+    if type(items) ~= "table" and type(res) ~= "table" then return false end
     local changed = false
     for id in TRACK do
-        local n = type(items[id]) == "number" and items[id] or 0
+        local src = RESOURCE[id] and res or items
+        if type(src) ~= "table" then continue end
+        local n = type(src[id]) == "number" and src[id] or 0
         if totals[id] ~= n then totals[id] = n changed = true end
     end
     if changed then saveTotals() end
@@ -108,6 +119,13 @@ if Hub.mode == "lobby" then
         while getgenv().ZenoHub == Hub do
             pcall(readProfileTotals)
             task.wait(15)
+        end
+    end)
+else
+    task.spawn(function() -- the profile appears a few seconds after the match loads
+        for _ = 1, 30 do
+            task.wait(1)
+            if getgenv().ZenoHub ~= Hub or select(2, pcall(readProfileTotals)) == true then return end
         end
     end)
 end
@@ -137,7 +155,7 @@ function Webhook.embed(rec)
     local rewards = { ("Gems: %s"):format(num(rec.gems)), ("Gold: %s"):format(num(rec.gold)), ("XP: %s"):format(num(rec.xp)) }
     if type(rec.resources) == "table" then
         for k, v in rec.resources do
-            if type(v) ~= "number" or v ~= 0 then table.insert(rewards, ("%s: %s"):format(itemName(k), num(v))) end
+            if type(v) ~= "number" or v ~= 0 then table.insert(rewards, ("%s: %s%s"):format(itemName(k), num(v), totalOf(k))) end
         end
     end
     local drops = {}
@@ -254,6 +272,7 @@ end
 local unsub = Core.on("run_finished", function(rec)
     -- Totals first, even with the notification off, so the next report is right.
     for _, d in rec.new_items or {} do if type(d) == "table" and d.item_id then addGain(d.item_id, d.amount) end end
+    for k, v in rec.resources or {} do addGain(k, v) end
     if not cfg.enabled then return end
     task.spawn(function()
         local ok, code = Webhook.send(Webhook.embed(rec))

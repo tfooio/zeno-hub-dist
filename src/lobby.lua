@@ -106,6 +106,7 @@ local function quietly(fn, ...)
     if not ok then error(err, 0) end
 end
 table.insert(Hub.connections, { Disconnect = function() quietN = 1 quiet(false) end })
+Lobby.quietly = quietly -- src/summer.lua: Auto Summon Summer Banner mutes the reveal the same way
 
 -- The server answers a summon sent inside its cooldown with this red label (and no spend); hide that one only.
 if LOBBY then
@@ -593,6 +594,11 @@ local function buildUI()
     inv:AddToggle("LobbyStars", { Text = "Auto Open Star (Capsule)", Tooltip = "Opens every owned star of the selected types.", Default = cfg.stars.enable, Callback = set(cfg.stars, "enable") })
     local starValues, starMap = labels(starIds, itemName)
     inv:AddDropdown("LobbyStarItems", { Text = "Select Star", Values = starValues, Multi = true, Default = selected(cfg.stars.items), Callback = picker(cfg.stars, "items", starMap) })
+    inv:AddButton({ Text = "Select All Stars", Tooltip = "Ticks every star type in the list above.", Func = function()
+        local all = {}
+        for _, name in starValues do all[name] = true end
+        Hub.UI.Library.Options.LobbyStarItems:SetValue(all)
+    end })
 
     -- Auto Summon Banner
     local sb = T:AddRightGroupbox("Auto Summon Banner", "sparkles")
@@ -624,7 +630,8 @@ local function buildUI()
 
     local ev = T:AddRightGroupbox("Auto Summoner - Event", "calendar")
     local banners = {}
-    for id, b in Banners do if b.active and b._does_not_rotate then table.insert(banners, id) end end
+    -- Not the capsule banners (Summer2026): their pulls give skins, no unit_added fires, so this loop would resend the paid call again and again. They have Summer tab > Auto Summon Summer Banner.
+    for id, b in Banners do if b.active and b._does_not_rotate and not b._MOCK_CAPSULE_BANNER then table.insert(banners, id) end end
     table.sort(banners)
     ev:AddToggle("LobbyEvent", { Text = "Auto Summon (Event)", Tooltip = "Spends the selected banner's event currency. Select a banner first.", Default = cfg.event.enable, Callback = set(cfg.event, "enable") })
     ev:AddDropdown("LobbyEventBanner", { Text = "Select Banner", Values = banners, Default = cfg.event.banner, AllowNull = true, Callback = set(cfg.event, "banner") })

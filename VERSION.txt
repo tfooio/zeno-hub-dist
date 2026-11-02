@@ -1,2 +1,2 @@
-fa3c28c 2026-10-31
-Dungeon: wait for the room to change after a step, retry instead of giving up
+70bcdea 2026-11-02
+Portal joiner: Auto Join Portal, and pick the next portal at match end

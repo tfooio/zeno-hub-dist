@@ -16,6 +16,8 @@ local defaults = {
     challenge = { enable = false, rewards = {}, done = nil },
     daily = { enable = false, done = nil },
     mansion = { enable = false, hard = false },
+    portal = { enable = false, portals = {} },
+    relics = { enable = false },
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
@@ -143,6 +145,48 @@ function modes.mansion()
     return { direct = { "request_start_infinite_tower", t and t.floor_reached or 1, cfg.mansion.hard and "Hard" or "Normal" } }
 end
 
+-- Portal: use_portal(itemUuid, {friends_only=true}) puts a ready pad (_PORTALS.Lobbies) under our name, request_start_game(pad)
+-- teleports (verified live 2026-11-02, Divine Treasure Portal). Opening a portal costs one try of the item.
+local LocalPlayer = game:GetService("Players").LocalPlayer
+local function ownPortalPad()
+    for _, p in workspace._PORTALS.Lobbies:GetChildren() do
+        if p:FindFirstChild("Owner") and p.Owner.Value == LocalPlayer and p.PortalReady.Value then return p end
+    end
+end
+-- The profile is not readable in a match (Game.profile), but the GUI services hold the session.
+-- shortcut: borrows hover_info_ui's session; switch to another ui if the game renames it.
+local function matchSession()
+    local ok, s = pcall(function() return Game.loader().load_client_service(script, "GUIService").hover_info_ui.session end)
+    return ok and s or nil
+end
+-- First selected portal in the inventory with tries left. In a match it must also pass the game's own replay check
+-- (same portal_group as the running one, tries left), so only that group's portals are offered.
+local function pickPortal(inMatch)
+    local want = cfg.portal.portals
+    if not next(want) then return nil, "no portal selected" end
+    local s = inMatch and matchSession()
+    local pd, Items = s and s.profile_data or Game.profile(), Game.data("Items")
+    local LSC = inMatch and Game.loader().load_core_service(script, "LevelServiceCore")
+    for _, it in (pd and pd.inventory.unique_items) or {} do
+        local d, u = Items[it.item_id], it._unique_item_data
+        if d and want[d.name] and (not u or (u._portal_tries or 0) < (u._portal_max_tries or 1))
+            and (not inMatch or LSC.is_valid_replay_portal_item(s, it.uuid)) then
+            return { portal = it.uuid, name = d.name }
+        end
+    end
+    return nil, "no portal in inventory"
+end
+function modes.portal() return pickPortal(false) end
+-- Match end (src/match.lua): uuid of the next portal for set_game_finished_vote("replay", {item_uuid = uuid}), or nil.
+function Joiner.next_portal()
+    local ld = Game.loader().LevelData
+    if not ld._is_map_or_portal_level or ld._owner_player_userid ~= LocalPlayer.UserId then return nil end
+    local plan, why = pickPortal(true)
+    if not plan then Core.log("portal replay:", why) return nil end
+    Core.log("portal replay:", plan.name)
+    return plan.portal
+end
+
 -- Dungeon Run (src/dungeon.lua): resolves shop / shrine / chest / death, then the room to enter.
 function modes.dungeon()
     if not Hub.Dungeon then return nil, "no dungeon module" end
@@ -151,9 +195,15 @@ function modes.dungeon()
     return { direct = { "dungeon_enter_room", room } }
 end
 
+-- Relic Farm (src/relics.lua): crafts what is complete, then returns the stage that drops the missing ingredient.
+function modes.relics()
+    if not Hub.Relics then return nil, "no relics module" end
+    return Hub.Relics.plan()
+end
+
 -- UI name -> mode key; cfg.order is the user's priority (first = tried first).
-local MODES = { World = "world", Legend = "legend", Raid = "raid", ["Infinity Mansion"] = "mansion", Challenge = "challenge", ["Daily Challenge"] = "daily", ["Dungeon Run"] = "dungeon" }
-local MODE_NAMES = { "World", "Legend", "Raid", "Infinity Mansion", "Challenge", "Daily Challenge", "Dungeon Run" }
+local MODES = { World = "world", Legend = "legend", Raid = "raid", ["Infinity Mansion"] = "mansion", Challenge = "challenge", ["Daily Challenge"] = "daily", Portal = "portal", ["Dungeon Run"] = "dungeon", ["Relic Farm"] = "relics" }
+local MODE_NAMES = { "World", "Legend", "Raid", "Infinity Mansion", "Challenge", "Daily Challenge", "Portal", "Dungeon Run", "Relic Farm" }
 -- A mode missing from the saved order (new mode, or a cleared slot) goes to the end, so it still runs.
 for _, n in MODE_NAMES do
     if not table.find(cfg.order, n) then
@@ -183,6 +233,26 @@ local function try(mode)
         if alive() then Core.log("joiner: no teleport after start", mode) end
         return true
     end
+    if plan.portal then
+        -- A pad already ours (earlier attempt, start refused) is reused, so no second try is spent.
+        local pad = ownPortalPad()
+        if not pad then
+            if not freePad(workspace._PORTALS.Lobbies) then return false, "no free pad" end
+            Core.log("joiner", mode, plan.name)
+            Game.invoke("use_portal", plan.portal, { friends_only = true })
+            for _ = 1, 20 do pad = ownPortalPad() if pad then break end task.wait(0.25) end
+        end
+        if not pad then Core.log("joiner: portal not opened", plan.name) return false end
+        Core.save_config() -- before the teleport (OnTeleport does not fire)
+        if Hub.Party then pcall(Hub.Party.wait_for_party, pad) end
+        Game.invoke("request_start_game", pad.Name)
+        task.wait(20)
+        if alive() then
+            Core.log("joiner: no teleport after start", mode, pad.Name)
+            pcall(Game.invoke, "request_leave_lobby", pad.Name)
+        end
+        return true
+    end
     local pad = freePad(plan.folder)
     if not pad then return false, "no free pad" end
     Core.log("joiner", mode, plan.level or pad.Level.Value, plan.diff or "", pad.Name)
@@ -190,8 +260,10 @@ local function try(mode)
     if plan.level and Game.invoke("request_lock_level", pad.Name, plan.level, true, plan.diff) ~= true then
         Core.log("joiner: lock refused", mode, plan.level)
         Game.invoke("request_leave_lobby", pad.Name)
+        if plan.on_fail then plan.on_fail() end
         return false
     end
+    if plan.on_join then plan.on_join() end
     if plan.tag then cfg[mode].done = plan.tag end
     Core.save_config() -- before the teleport (OnTeleport does not fire)
     -- Pads preset by the server (challenge, daily) ignore request_start_game and start when their timer ends.
@@ -271,9 +343,20 @@ if Tabs then
     mansion:AddToggle("JoinMansion", { Text = "Auto Join Infinity Mansion", Tooltip = "Starts the highest room reached.", Default = cfg.mansion.enable, Callback = set(cfg.mansion, "enable") })
     mansion:AddToggle("JoinMansionHard", { Text = "Hard Mode", Default = cfg.mansion.hard, Callback = set(cfg.mansion, "hard") })
 
+    local seen, PORTALS = {}, {}
+    for _, d in Game.data("Items") do
+        if d.item_group == "Portals" and d.usage and d.usage.type == "open_portal" and not seen[d.name] then
+            seen[d.name] = true table.insert(PORTALS, d.name)
+        end
+    end
+    table.sort(PORTALS)
+    local portal = T:AddRightGroupbox("Portal Joiner", "orbit")
+    portal:AddToggle("JoinPortal", { Text = "Auto Join Portal", Tooltip = "Opens a portal from your inventory (one try each) and starts it solo.", Default = cfg.portal.enable, Callback = set(cfg.portal, "enable") })
+    portal:AddDropdown("JoinPortalSelect", { Text = "Select Portal", Tooltip = "Only these portals are opened. Empty = none.", Values = PORTALS, Multi = true, Default = Core.keys(cfg.portal.portals), Callback = multi(cfg.portal, "portals") })
+
     local daily = T:AddRightGroupbox("Daily Challenge Joiner", "calendar")
     daily:AddToggle("JoinDaily", { Text = "Auto Join Daily Challenge", Tooltip = "Solo, from the daily pad (no matchmaking).", Default = cfg.daily.enable, Callback = set(cfg.daily, "enable") })
 end
 
-Joiner.modes, Joiner.highest = modes, highest
+Joiner.modes, Joiner.highest, Joiner.unlocked = modes, highest, unlocked
 return Joiner

@@ -14,11 +14,11 @@ local METHODS = { "Cheapest first (farms first)", "Smart (best value per yen)", 
 local KINDS = { "Enemy path (auto)", "My saved position" }
 local PRIOS = { "Game default", "first", "last", "strongest", "weakest", "closest", "farthest" }
 local defaults = {
-    enable = false, upgrade = false, upgrade_place = false, focus_farm = false, opening = true,
+    enable = false, upgrade = false, upgrade_place = false, focus_farm = false, opening = true, fuse = true,
     order = six(function(i) return i end), wave = six(function() return 0 end), limit = six(function() return 0 end),
     ulimit = six(function() return 0 end), uorder = six(function(i) return i end), uwave = six(function() return 0 end),
     method = METHODS[1], priority = PRIOS[1], boss_priority = PRIOS[1], mode_preset = {},
-    distance = 50, ground = 60, hill = 80, margin = 0.3,
+    distance = 50, ground = 60, hill = 80, margin = 0.3, pack = true,
     kind = {}, mid = {}, slotpos = {}, -- per stage key
     learned = {}, use_learned = true, -- per map: learned[map][slot] = { {x, y, z}, ... }
 }
@@ -139,11 +139,13 @@ if Tabs then
     end })
     a1:AddToggle("AutoPlayOpening", { Text = "Smart Opening", Tooltip = "When your first unit is too expensive, place farm units first instead of waiting.", Default = cfg.opening, Callback = set("opening") })
     a1:AddToggle("AutoPlayUpgradePlace", { Text = "Upgrade Between Placements", Tooltip = "One upgrade after every placement. Off: place everything first, then upgrade.", Default = cfg.upgrade_place, Callback = set("upgrade_place") })
+    a1:AddToggle("AutoPlayFuse", { Text = "Auto Fuse Vegito", Tooltip = "With Carrot (Ultra) and Vego (Mage II) both on the hotbar: upgrades them only to level 7, casts the fusion on the better one (stat potentials, level, relic), then upgrades the Fused Hero to its maximum.", Default = cfg.fuse, Callback = set("fuse") })
     a1:AddDropdown("AP_Method", { Text = "Upgrade Method", Tooltip = "Cheapest first = buys any upgrade it can afford, farm units first, then the cheapest (never waits on an expensive one). The others: Smart = most damage per yen, or hotbar order, your own order, or the lowest level first. Upgrade Cap always applies.", Values = METHODS, Default = cfg.method, Callback = set("method") })
 
     local a2 = adv:AddTab("Position")
     ui.stage = a2:AddLabel("Stage: join a match", true)
     a2:AddSlider("AP_Gap", { Text = "Space Between Units", Tooltip = "Extra studs left between units (they only need to not touch).", Default = cfg.margin, Min = 0, Max = 6, Rounding = 1, Callback = set("margin") })
+    a2:AddToggle("AP_Pack", { Text = "Pack Units Tight", Tooltip = "Needs Place Anywhere on (Game tab). Units stand 1 stud apart around the path point and may stand on the road. Off: hitboxes must not touch, the road is avoided, Space Between Units applies.", Default = cfg.pack, Callback = set("pack") })
     ui.kind = a2:AddDropdown("AP_Kind", { Text = "Center Units On", Tooltip = "The enemy path (automatic), or a position you saved for this stage.", Values = KINDS, Default = KINDS[1], Callback = function(v)
         cfg.kind[stageKey()] = v ~= KINDS[1] and v or nil
         Core.save_config()
@@ -237,6 +239,17 @@ local function status(text)
 end
 
 if Hub.mode ~= "match" then return AutoPlay end
+
+-- Summer Hunt started by Auto Summer Hunt: its own settings on top of nothing (src/summer.lua); the saved config is not read or written.
+do
+    local ok, ov = pcall(function() return Hub.Summer and Hub.Summer.pilot(defaults, METHODS) end)
+    if ok and ov then
+        cfg = ov
+        Core.log("autoplay: Summer autopilot settings")
+    elseif not ok then
+        Core.log("ERROR autoplay pilot", ov)
+    end
+end
 
 ------------------------------------------------------------------ match side
 local defs = Game.data("Units")
@@ -386,7 +399,13 @@ end
 
 -- The game's placement preview asks the unit's hitbox cylinder what it touches (other player hitboxes, _road, _bounds).
 -- We ask the same question with a ghost cylinder; _bounds lives in ReplicatedStorage, so a client-only copy sits in workspace.
-local ghost, ovp
+local ghost, ovp, ovpB
+-- Packed mode: Place Anywhere is on, so road and unit overlap are fine; the server only refuses a unit of the same type closer than ~0.75 studs.
+-- Measured 2026-10-26: default-size units (hitbox radius 1.87) were accepted at 1.0, but a Speedwagon (override radius 3) refused anything
+-- within 2.0 and accepted 2.18: larger hitboxes need ~0.75 x radius (shortcut: fits two data points; Bulma, radius 5, is a guess).
+local PACK = 1.0
+local function gapFor(a, b) local R = math.max(a, b) return R > 2 and 0.75 * R + 0.05 or PACK end
+local function packed() return cfg.pack and (Core.config.game or {}).place_anywhere end
 local function setupGhost()
     local folder = Instance.new("Folder")
     folder.Name = "ZenoGhost"
@@ -410,12 +429,19 @@ local function setupGhost()
     for i = #list, 1, -1 do if not list[i] then table.remove(list, i) end end
     ovp.FilterDescendantsInstances = list
     ovp.MaxParts = 50
+    if copy then -- bounds only (trees, walls: whether the server accepts them is unverified, so packed mode still avoids them)
+        ovpB = OverlapParams.new()
+        ovpB.FilterType = Enum.RaycastFilterType.Include
+        ovpB.FilterDescendantsInstances = { copy }
+        ovpB.MaxParts = 5
+    end
 end
-local function touches(pos, r)
+local function touches(pos, r, boundsOnly)
+    if boundsOnly and not ovpB then return end
     ghost.Size = Vector3.new(2.66, r * 2, r * 2)
     ghost.CFrame = CFrame.new(pos + Vector3.new(0, 1.33, 0)) * CFrame.Angles(0, 0, math.pi / 2)
     local units = workspace:FindFirstChild("_UNITS")
-    for _, part in workspace:GetPartsInPart(ghost, ovp) do
+    for _, part in workspace:GetPartsInPart(ghost, boundsOnly and ovpB or ovp) do
         if not (units and part:IsDescendantOf(units)) then return part end -- _road or _bounds
         if part.Name == "_hitbox" and part.Parent and CS:HasTag(part.Parent, "player_units") then return part end -- another player's unit
     end
@@ -441,6 +467,48 @@ end
 local blacklist = {} -- cell key -> expiry (os.clock)
 local recent = {}    -- { pos, r, t } placed a moment ago, maybe not in _UNITS yet
 local hb -- hotbar, set when the loop starts
+
+-- Auto Fuse (docs/features/summer-update.md, verified 2026-11-01): Carrot and Vego get their fusion ability at upgrade 7 of 8, and
+-- the cast on either one returns true only when both are ready. They are capped at 7 (the last upgrade is wasted yen) and the cast
+-- goes to the better unit first (stat potentials, level, relic). Vegito (not on the hotbar) is then upgraded by upgradeList.
+local FUSE_CARROT, FUSE_VEGO, FUSE_LEVEL = "goku_ssj3_evolved", "vegeta_majin_evolved", 7
+local function fuseOn()
+    if not (cfg.fuse and hb) then return false end
+    local c, v
+    for _, h in hb do
+        if h.id == FUSE_CARROT then c = true elseif h.id == FUSE_VEGO then v = true end
+    end
+    return c and v
+end
+-- shortcut: the game's own rule for whose stats Vegito keeps is unknown; this ranks potentials x2 + range + speed + level + relic. Check it when it is known.
+local function fuseScore(u)
+    local ok, col = pcall(function() return Game.loader().load_client_service(script, "GUIService").session.collection.collection_profile_data end)
+    local o = ok and col.owned_units[u._stats.uuid.Value]
+    if not o then return 0 end
+    local ts = o.trait_stats or {}
+    return (ts.potency_stat or 1) * 2 + (ts.range_stat or 1) + (ts.speed_stat or 1) + (o.xp or 0) / 4.4e6 + (o._equipped_relic and 0.3 or 0)
+end
+local lastFuse = 0
+local function tryFuse(units)
+    if not fuseOn() or os.clock() - lastFuse < 3 then return end
+    local ready, has = {}, {}
+    for _, u in units do
+        local id = u._stats.id.Value
+        local aa = u._stats:FindFirstChild("active_attack")
+        if (id == FUSE_CARROT or id == FUSE_VEGO) and aa and tostring(aa.Value):find("fusion") then
+            table.insert(ready, u)
+            has[id] = true
+        end
+    end
+    if not (has[FUSE_CARROT] and has[FUSE_VEGO]) then return end
+    lastFuse = os.clock()
+    table.sort(ready, function(a, b) return fuseScore(a) > fuseScore(b) end)
+    for _, u in ready do
+        local ok, res = pcall(Game.invoke, "use_active_attack", u)
+        Core.log(("autoplay fuse cast on %s -> %s (score %.2f)"):format(u._stats.id.Value, tostring(ok and res), fuseScore(u)))
+        if ok and res then return end
+    end
+end
 
 -- Everything standing (or planned): { pos, r, range, attacks }
 local function placedList(units, virtual)
@@ -531,7 +599,7 @@ local function rank(slot, h, placed, center, around, boost)
     for pass = 1, 3 do
         for _, pl in placed do
             if rankOf(pl) == pass then
-                local dist = pl.r + r0 + cfg.margin + 0.1
+                local dist = packed() and gapFor(pl.r, r0) or (pl.r + r0 + cfg.margin + 0.1)
                 local lift = pass == 1 and 2000 or (pass == 2 and 1000 or 0)
                 for _, dir in DIRS do touching(pl.pos.X + dir[1] * dist, pl.pos.Z + dir[2] * dist, dir[3], lift) end
             end
@@ -573,17 +641,18 @@ end
 local function spotFree(c, h, virtual)
     if (blacklist[c.key] or 0) > os.clock() then return false end
     local r = hitR(h.def)
-    if touches(c.pos, r) then return false end
+    local pk = packed()
+    if touches(c.pos, r, pk) then return false end
     local m = cfg.margin
     for _, v in virtual or {} do
-        if (Vector3.new(v.pos.X, 0, v.pos.Z) - Vector3.new(c.pos.X, 0, c.pos.Z)).Magnitude < r + v.r + m then return false end
+        if (Vector3.new(v.pos.X, 0, v.pos.Z) - Vector3.new(c.pos.X, 0, c.pos.Z)).Magnitude < (pk and gapFor(r, v.r) or r + v.r + m) then return false end
     end
     for i = #recent, 1, -1 do
         if os.clock() - recent[i].t > 3 then table.remove(recent, i)
-        elseif (Vector3.new(recent[i].pos.X, 0, recent[i].pos.Z) - Vector3.new(c.pos.X, 0, c.pos.Z)).Magnitude < r + recent[i].r + m then return false end
+        elseif (Vector3.new(recent[i].pos.X, 0, recent[i].pos.Z) - Vector3.new(c.pos.X, 0, c.pos.Z)).Magnitude < (pk and gapFor(r, recent[i].r) or r + recent[i].r + m) then return false end
     end
     -- the margin also applies to standing units (the ghost only needs them not to touch)
-    if m > 0 and touches(c.pos, r + m) then return false end
+    if not pk and m > 0 and touches(c.pos, r + m) then return false end
     return true
 end
 
@@ -644,6 +713,12 @@ local function place(slot, h, units, live)
         if checked % 60 == 0 then task.wait() end
         if not spotFree(c, h, placed) then continue end
         tries += 1
+        local tag = ""
+        if packed() then -- what the packed spot overlaps, and the distance to the nearest other unit (for the log)
+            local t, near = touches(c.pos, hitR(h.def)), math.huge
+            for _, pl in placed do near = math.min(near, (Vector3.new(pl.pos.X, 0, pl.pos.Z) - Vector3.new(c.pos.X, 0, c.pos.Z)).Magnitude) end
+            tag = (" packed%s near %.2f"):format(t and (t:IsDescendantOf(workspace._UNITS) and " on-unit" or " on-road") or "", near)
+        end
         local look = Vector3.new(center.X, c.pos.Y, center.Z)
         local cf = (look - c.pos).Magnitude > 0.1 and CFrame.lookAt(c.pos, look) or CFrame.new(c.pos)
         local before = os.clock()
@@ -658,7 +733,7 @@ local function place(slot, h, units, live)
         if res == true then
             counts.placed += 1
             table.insert(recent, { pos = c.pos, r = hitR(h.def), t = os.clock() })
-            logLine(("place slot %d %s %s at (%.0f, %.0f) score %.0f try %d checked %d wave %s money %.0f%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " learned" or ""))
+            logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " learned" or "", tag))
             task.delay(1, function()
                 -- tag the model (Hill Percentage share) and set the target priority
                 for _, u in myUnits() do
@@ -690,7 +765,7 @@ local function place(slot, h, units, live)
         blacklist[c.key] = os.clock() + 120
         if msgd then
             counts.refused_pos += 1
-            logLine(("refused slot %d %s at (%.0f, %.1f, %.0f): %s"):format(slot, c.cls, c.pos.X, c.pos.Y, c.pos.Z, msgd))
+            logLine(("refused slot %d %s at (%.1f, %.1f, %.1f): %s%s"):format(slot, c.cls, c.pos.X, c.pos.Y, c.pos.Z, msgd, tag))
         else
             counts.refused_silent += 1
             silentRun += 1
@@ -704,7 +779,7 @@ local function place(slot, h, units, live)
                 logLine(("learned cap %d for slot %d %s (silent refusal)"):format(standing, slot, h.id))
                 return false, "cap"
             end
-            logLine(("refused slot %d %s at (%.0f, %.1f, %.0f): silent"):format(slot, c.cls, c.pos.X, c.pos.Y, c.pos.Z))
+            logLine(("refused slot %d %s at (%.1f, %.1f, %.1f): silent%s"):format(slot, c.cls, c.pos.X, c.pos.Y, c.pos.Z, tag))
         end
         task.wait(0.1)
     end
@@ -889,6 +964,7 @@ local function upgradeList(units)
             local st = u._stats
             local lvl, max = st.upgrade.Value, st.max_upgrade.Value
             local goal = lim > 0 and math.min(lim, max) or max
+            if (st.id.Value == FUSE_CARROT or st.id.Value == FUSE_VEGO) and fuseOn() then goal = math.min(goal, FUSE_LEVEL) end
             if lvl < goal then
                 local def = extra or hb[slot].def
                 local step = def.upgrade and def.upgrade[lvl + 1]
@@ -904,8 +980,12 @@ local function upgradeList(units)
                     value = (dpsAt(def, lvl + 1) - dpsAt(def, lvl)) / math.max(cost, 1)
                 end
                 -- only a farm upgrade that cannot pay back before the last wave is skipped; a level that slows a unit still counts (range, new attacks)
-                if not (farm and value < 0) then
-                    table.insert(list, { unit = u, slot = slot, id = st.id.Value, lvl = lvl, cost = cost, late = lim == -1, farm = cfg.focus_farm and farm, isfarm = farm, value = value })
+                -- An unlisted unit (Vegito) needs a real upgrade price: Erwin's scouts (aot_generic) have levels but no cost data and every try is refused (2810 lines in one Hunt).
+                if (not extra or cost > 0) and not (farm and value < 0) then
+                    -- Auto Fuse: Carrot, Vego (up to 7) and the Fused Hero come right after the farms, whatever the method.
+                    local id = st.id.Value
+                    local prio = (id == FUSE_CARROT or id == FUSE_VEGO or id == "vegito") and fuseOn()
+                    table.insert(list, { unit = u, slot = slot, id = id, lvl = lvl, cost = cost, late = lim == -1, farm = cfg.focus_farm and farm, isfarm = farm, prio = prio, value = value })
                 end
             end
         end
@@ -913,6 +993,9 @@ local function upgradeList(units)
     local method = cfg.method
     table.sort(list, function(a, b)
         if a.late ~= b.late then return b.late end
+        local ta = (a.farm or (method == METHODS[1] and a.isfarm)) and 0 or a.prio and 1 or 2
+        local tb = (b.farm or (method == METHODS[1] and b.isfarm)) and 0 or b.prio and 1 or 2
+        if ta ~= tb then return ta < tb end
         if method == METHODS[1] then -- farms first, then the cheapest
             if a.isfarm ~= b.isfarm then return a.isfarm end
             if a.cost ~= b.cost then return a.cost < b.cost end
@@ -939,6 +1022,7 @@ end
 local function pickUpgrade(list, money, rate)
     local first = list[1]
     if not first or money >= first.cost then return first end
+    if first.prio and (first.cost - money) / rate <= 20 then return first end -- save up for the fusion path instead of buying cheaper units first
     if cfg.method == METHODS[1] then -- anything affordable, in the list's order (farms first, then the cheapest)
         for _, e in list do if money >= e.cost then return e end end
         return first
@@ -1224,6 +1308,7 @@ function AutoPlay.start()
                 if finished and finished.Value then status("match finished") lastProgress = os.clock() task.wait(2) return end
                 if macroOwns() then status("a stage macro is playing") lastProgress = os.clock() task.wait(1) return end
                 local units = myUnits()
+                tryFuse(units)
                 local money = LP._stats.resource.Value
                 local rate = income(money)
                 local list, count = eligible(units)
