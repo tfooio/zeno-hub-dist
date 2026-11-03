@@ -14,7 +14,7 @@ local MATCH = Hub.mode == "match"
 
 local cfg = Core.config.misc or {}
 Core.config.misc = cfg
-local defaults = { lobby_on_join = false, walk = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true, ping_freeze = false }
+local defaults = { lobby_on_join = false, walk = false, walk_units = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true, ping_freeze = false }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
 local function alive() return env.ZenoHub == Hub end
@@ -78,10 +78,24 @@ local secure = Hub.SecureBox
 if secure then
     secure:AddToggle("WalkAround", { Text = "Walk Around", Tooltip = "Match only: every 20 to 40 s the character walks to a spot a few studs away.", Default = cfg.walk, Callback = set("walk") })
 end
+-- Walk To Units (user, 2026-11-03): Auto Play calls Misc.walkTo(position) after it places or upgrades a unit; the character walks next to it.
+-- Walk Around stays quiet for a while after each such walk so the two do not pull the character apart.
+local lastWalkTo = 0
+function Misc.walkTo(pos)
+    if not (MATCH and cfg.walk_units) then return end
+    local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+    if not (hum and hum.Health > 0) then return end
+    lastWalkTo = os.clock()
+    pcall(hum.MoveTo, hum, pos + Vector3.new(3, 0, 3))
+end
+if secure then
+    secure:AddToggle("WalkToUnits", { Text = "Walk To Units", Tooltip = "Match only: the character walks to the unit Auto Play just placed or upgraded.", Default = cfg.walk_units, Callback = set("walk_units") })
+end
 if MATCH then
     task.spawn(function()
         while alive() do
             task.wait(math.random(20, 40))
+            if os.clock() - lastWalkTo < 60 then continue end
             local char = LP.Character
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local root = char and char:FindFirstChild("HumanoidRootPart")

@@ -16,6 +16,10 @@ cfg.edit = cfg.edit or "default"
 cfg.needVegito = cfg.needVegito or {} -- weather -> true once it was lost twice in a row without the Vegito pair
 cfg.losses = cfg.losses or {} -- weather -> losses in a row
 cfg.tune = cfg.tune or { L = 1 } -- card tuner: how many debuff cards a run takes (raised after a win, lowered after a loss)
+cfg.follow = cfg.follow or {}
+if cfg.follow.enable == nil then cfg.follow.enable = true end
+cfg.follow.units = cfg.follow.units or 3 -- teammates' damage units to wait for
+cfg.follow.wave = cfg.follow.wave or 7 -- or this wave, whichever comes first
 cfg.shop = cfg.shop or { enable = false, keep = 0 } -- Auto Summon Summer Banner: on / Summer Pearls to leave untouched
 cfg.sellSkins = cfg.sellSkins or { enable = false, rarity = { Rare = true } } -- Auto Sell Skins: on / skin rarities to sell
 
@@ -544,18 +548,19 @@ local function ignored(name, tier) return 500 + (table.find(FALLBACK_ORDER, name
 local CARD_MODES = { "Easy", "Medium", "Hard", "Impossible" }
 cfg.cardMode = table.find(CARD_MODES, cfg.cardMode) and cfg.cardMode or "Easy"
 -- Enemy Health and Enemy Speed are okay up to a point (friends, user: "about 150%" for health; resist cards never). Each is capped at cfg.<cap> percent
--- over the run. The amount is read from the offer's effects ({stat = "health" / "speed", amount = fraction}, as the enemy buff list shows health).
--- UNVERIFIED: the offer's effects format and the speed stat name; the offers log now stores the effects, and a capped card whose amount cannot
--- be read is logged (and then taken without a cap).
+-- over the run. The amount is read from the offer's effects (format below, verified from the offers log 2026-11-03: Health I / II / III = +50 / 80 / 200 %,
+-- Speed I / II / III = +25 / 50 / 100 %); a capped card whose amount cannot be read is logged and then taken without a cap.
 local OKAY_DEBUFFS = { ["Enemy Regen"] = true, ["Enemy Shield"] = true, ["Enemy Health"] = true, ["Enemy Speed"] = true }
-local CAPPED = { ["Enemy Health"] = { stat = "health", cap = "hpCap" }, ["Enemy Speed"] = { stat = "speed", cap = "speedCap" } }
+-- Effects as the offers log shows them (2026-11-03): Health = { type = "enemy_stat_mul", stat = "health", amount = 0.5 }, Speed = { type = "enemy_speedup", amount = 0.25 };
+-- every debuff card also carries { type = "candy_multiplier", amount = 0.3 }, the pearl bonus it adds (Squall's weather card 0.5).
+local CAPPED = { ["Enemy Health"] = { type = "enemy_stat_mul", stat = "health", cap = "hpCap" }, ["Enemy Speed"] = { type = "enemy_speedup", cap = "speedCap" } }
 cfg.hpCap = tonumber(cfg.hpCap) or 150
 cfg.speedCap = tonumber(cfg.speedCap) or 50 -- guess, no number from the user yet
 local run = { cards = {}, debuffs = 0, total = {} } -- total[card] = percent taken so far this run
-local function amountOf(opt, stat) -- percent a card adds, nil when the offer carries no readable amount
+local function amountOf(opt, spec) -- percent a card adds, nil when the offer carries no readable amount
     local sum
     for _, e in type(opt) == "table" and type(opt.effects) == "table" and opt.effects or {} do
-        if type(e) == "table" and e.stat == stat and tonumber(e.amount) then sum = (sum or 0) + e.amount * 100 end
+        if type(e) == "table" and e.type == spec.type and e.stat == spec.stat and tonumber(e.amount) then sum = (sum or 0) + e.amount * 100 end
     end
     return sum
 end
@@ -573,7 +578,7 @@ function Summer.cardRank(card, opt)
                 local okay = OKAY_DEBUFFS[n]
                 local capped = CAPPED[n]
                 if okay and capped then
-                    local pct = amountOf(opt, capped.stat)
+                    local pct = amountOf(opt, capped)
                     if not pct then Core.log("summer: " .. n .. " card without a readable amount, cap not applied") end
                     if pct and (run.total[n] or 0) + pct > cfg[capped.cap] then okay = false end
                 end
@@ -592,7 +597,7 @@ function Summer.cardPicked(card, wave, offered, opt)
     table.insert(run.cards, { wave = wave, card = card, offered = offered })
     local base = parseCard(card)
     if table.find(DEBUFF_ORDER, base) then run.debuffs += 1 end
-    if CAPPED[base] then run.total[base] = (run.total[base] or 0) + (amountOf(opt, CAPPED[base].stat) or 0) end
+    if CAPPED[base] then run.total[base] = (run.total[base] or 0) + (amountOf(opt, CAPPED[base]) or 0) end
 end
 
 local bleedOnHotbar
@@ -663,6 +668,29 @@ function Summer.pilot(defaults, methods)
     -- Placement order (user: everything placed as soon as possible, only the farms first): farms, then the two carries, the buffer, the support unit last.
     o.order = { 1, 6, 2, 3, 4, 5 }
     o.kind, o.mid, o.slotpos, o.mode_preset = {}, {}, {}, {}
+    -- Follow Teammates (user, 2026-11-03, for runs with other players: matchmaking or a party): the farms are placed at once, the other units wait until
+    -- cfg.follow.units damage units of the others stand or wave cfg.follow.wave is reached (Bulby is upgraded meanwhile, no cap on farms), then stand
+    -- where the others' damage units are (median distance along the lane). Alone in the match nothing is held.
+    local Players = game:GetService("Players")
+    local function following() return cfg.follow.enable and #Players:GetPlayers() > 1 and Hub.AutoPlay ~= nil end
+    o.wave = setmetatable({}, { __index = function(_, slot)
+        if not following() then return 0 end
+        local id = slotUnit(slot)
+        if not id or Summer.role(id).farm then return 0 end
+        local ok, n = pcall(Hub.AutoPlay.teammates)
+        if ok and n >= cfg.follow.units then return 0 end
+        return workspace._wave_num.Value >= cfg.follow.wave and 0 or math.huge
+    end })
+    local baseDistance = o.distance
+    o.distance = nil
+    setmetatable(o, { __index = function(_, k)
+        if k ~= "distance" then return nil end
+        if following() then
+            local ok, n, med = pcall(Hub.AutoPlay.teammates)
+            if ok and n > 0 and med then return med * 100 end
+        end
+        return baseDistance
+    end })
     o.limit = setmetatable({}, { __index = function(_, slot) return (rule(slot)) end })
     o.ulimit = setmetatable({}, { __index = function(_, slot) return select(2, rule(slot)) end })
     return o
@@ -685,6 +713,9 @@ if Tabs then
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather, joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
     hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
+    hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "With other players in the match: farms go down at once, the other units wait for the teammates' damage units (or the wave below), then stand where theirs stand along the path. Alone nothing changes.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() end })
+    hunt_box:AddSlider("SummerFollowUnits", { Text = "Wait for Teammate Units", Tooltip = "Damage units of the other players to wait for before placing yours.", Default = cfg.follow.units, Min = 1, Max = 12, Rounding = 0, Callback = function(v) cfg.follow.units = v Core.save_config() end })
+    hunt_box:AddSlider("SummerFollowWave", { Text = "Place Anyway at Wave", Tooltip = "Your units are placed at this wave even when the teammates have not placed enough.", Default = cfg.follow.wave, Min = 1, Max = 30, Rounding = 0, Callback = function(v) cfg.follow.wave = v Core.save_config() end })
     hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
     hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
     hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })

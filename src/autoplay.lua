@@ -667,6 +667,34 @@ local function touches(pos, r, boundsOnly)
 end
 AutoPlay.touches = function(pos, r) return touches(pos, r) end
 
+-- Other players' damage units (Summer autopilot in a party / matchmaking, user 2026-11-03): how many stand, and the median of where they stand as a
+-- fraction of the longest lane (0 = enemy spawn, 1 = base: the same scale as Distance Percentage). Farms, buffers and units without damage do not count.
+-- shortcut: an owner's summons (Elyssia's eels, scouts) are counted too when their id has damage; the median hardly moves, the count can run ahead.
+-- UNVERIFIED live: read from the same `_stats.player` / `_stats.id` fields as myUnits, not yet run against a real teammate's units.
+function AutoPlay.teammates()
+    local lane
+    for _, l in lanes do if not lane or l.length > lane.length then lane = l end end
+    local folder = workspace:FindFirstChild("_UNITS")
+    if not (lane and folder) then return 0, nil end
+    local fracs = {}
+    for _, u in folder:GetChildren() do
+        local s = u:FindFirstChild("_stats")
+        local owner = s and s:FindFirstChild("player")
+        local id = s and s:FindFirstChild("id")
+        local def = id and defs[id.Value]
+        if owner and owner.Value and owner.Value ~= LP and def and (def.damage or 0) > 0 and not isFarm(def) and not def._show_as_buff_unit then
+            local p, best, prog = u:GetPivot().Position, math.huge, nil
+            for _, smp in lane.samples do
+                local d = (smp.p.X - p.X) ^ 2 + (smp.p.Z - p.Z) ^ 2
+                if d < best then best, prog = d, smp.prog end
+            end
+            if prog then table.insert(fracs, prog) end
+        end
+    end
+    table.sort(fracs)
+    return #fracs, fracs[1] and fracs[math.ceil(#fracs / 2)] or nil
+end
+
 ------------------------------------------------------------------ units and planning
 local function myUnits()
     local out = {}
@@ -951,6 +979,7 @@ local function place(slot, h, units, live)
         end
         if res == true then
             counts.placed += 1
+            if Hub.Misc and Hub.Misc.walkTo then Hub.Misc.walkTo(c.pos) end -- Misc > Walk To Units
             table.insert(recent, { pos = c.pos, r = hitR(h.def), t = os.clock() })
             logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " learned" or "", tag))
             task.delay(1, function()
@@ -1499,6 +1528,7 @@ end
 local function doUpgrade(up)
     local ok = Game.invoke("upgrade_unit_ingame", up.unit) == true
     counts.upgrades += ok and 1 or 0
+    if ok and Hub.Misc and Hub.Misc.walkTo then pcall(function() Hub.Misc.walkTo(up.unit:GetPivot().Position) end) end -- Misc > Walk To Units
     logLine(("upgrade slot %d %s %d -> %d cost %.0f value %.4f %s"):format(up.slot, up.id, up.lvl, up.lvl + 1, up.cost, up.value or 0, ok and "ok" or "refused"))
     return ok
 end
