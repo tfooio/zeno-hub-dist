@@ -1,2 +1,2 @@
-fe97201 2026-11-03
-Summer: matchmaking Hunts always return to the lobby after a run, never replay
+eb95dd3 2026-11-03
+Summer: wait for the popup UI before queueing, retry a failed matchmaking join after 10 s, log why an idle lobby is not joining

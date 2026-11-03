@@ -320,9 +320,13 @@ local function hunt()
     if os.clock() < busyUntil then return end
     -- Right after a teleport the game's lobby services are not built yet (2026-11-03: the first pass 2 s after load failed on profile_data and the popup UI
     -- and a 120 s wait was already set), so nothing starts until the profile is readable.
-    if not pcall(profile) then return end
+    -- A lobby that sits idle says why every 60 s (reported 2026-11-03: matchmaking left the match but never queued again, cause not visible in the log).
+    local function idle(why)
+        if os.clock() - (Summer.idleLogged or 0) > 60 then Summer.idleLogged = os.clock() Core.log("summer: not joining,", why) end
+    end
+    if not pcall(profile) then return idle("profile not readable yet") end
     local w = Summer.weather()
-    if not w then return end
+    if not w then return idle("no weather on the Hunt pad") end
     if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
         if not Summer.partyActive() then memberKey = nil return end
         local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
@@ -346,8 +350,22 @@ local function hunt()
     Core.save_config()
     Core.log("summer: joining the Hunt,", weatherName(w), cfg.matchmaking and "(matchmaking)" or "")
     if cfg.matchmaking and Hub.Joiner then
+        -- MiniTipex's log (2026-11-03): a join 6 s after the lobby loaded died on the popup UI not existing yet ("show_matchmaking_popup" on nil) and the 120 s
+        -- wait set below was already running, so that Hunt was lost for two minutes. Wait for the UI, and retry a failed call soon.
+        local function uiReady()
+            for _ = 1, 60 do
+                local ok, ui = pcall(function() return Game.loader().load_client_service(script, "GUIService").notification_windows_ui end)
+                if ok and ui and ui.show_matchmaking_popup then return true end
+                task.wait(0.5)
+            end
+        end
         busyUntil = os.clock() + 120 -- a queue can take a while; the lobby teleports us when it finds a match
-        if not Hub.Joiner.matchmake("summer2_event") then Core.log("summer: matchmaking not entered") busyUntil = os.clock() + 35 end
+        local ok, entered = false, "popup UI never appeared"
+        if uiReady() then ok, entered = pcall(Hub.Joiner.matchmake, "summer2_event") end
+        if not (ok and entered) then
+            Core.log("summer: matchmaking not entered", ok and "" or tostring(entered))
+            busyUntil = os.clock() + 10
+        end
         return
     end
     call("request_join_lobby", PAD)
