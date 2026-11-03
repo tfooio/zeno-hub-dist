@@ -1,2 +1,2 @@
-4d0d1ff 2026-11-03
-Summer: card voting without Game-tab toggles, one-click Hunt votes, Custom card preset with weather list, weather cards in the presets, Goku/Vegeta level 7 first, matchmaking-only follow, number-box rank lists
+6fe0e62 2026-11-03
+Stall watchdog: lobby retry and rejoin, match stall rejoin, recovered report, Hunt summary webhook

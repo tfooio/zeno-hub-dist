@@ -127,4 +127,8 @@ if not ok then Hub.Core.log("ERROR party:", err) end
 ok, err = xpcall(function() Hub.Misc = Hub.require("misc") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR misc:", err) end
 
+-- After Misc: it rejoins through Hub.Misc and shares the Misc tab.
+ok, err = xpcall(function() Hub.Watchdog = Hub.require("watchdog") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR watchdog:", err) end
+
 return Hub

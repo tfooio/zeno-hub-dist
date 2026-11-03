@@ -315,6 +315,7 @@ end
 
 -- Hunt loop (lobby). One join per 40 s so a slow teleport is not repeated.
 local busyUntil, memberKey = 0, nil
+function Summer.nudge() busyUntil, memberKey = 0, nil end -- src/watchdog.lua: try the join / the team again right now
 local function hunt()
     if os.clock() < busyUntil then return end
     -- Right after a teleport the game's lobby services are not built yet (2026-11-03: the first pass 2 s after load failed on profile_data and the popup UI
