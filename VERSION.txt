@@ -1,2 +1,2 @@
-eb95dd3 2026-11-03
-Summer: wait for the popup UI before queueing, retry a failed matchmaking join after 10 s, log why an idle lobby is not joining
+febb72f 2026-11-03
+Info tab: equipped units' lifetime takedowns vs evolve requirement

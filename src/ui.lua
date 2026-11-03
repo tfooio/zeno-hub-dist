@@ -39,6 +39,7 @@ local Tabs = {
     Macro = Window:AddTab("Macro", "play"),
     Webhook = Window:AddTab("Webhook", "webhook"),
     Misc = Window:AddTab("Misc", "ellipsis"),
+    Info = Window:AddTab("Info", "info"),
     Settings = Window:AddTab("Settings", "settings"),
 }
 
