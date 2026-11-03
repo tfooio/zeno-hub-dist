@@ -182,14 +182,20 @@ local function setGameSkip(on)
     end
     Core.log("ERROR auto skip setting not accepted", on)
 end
+-- Auto Summer Hunt is one click (user, 2026-11-03): inside its Hunt the votes below run whatever the Game tab toggles say.
+local function forced() return Hub.Summer ~= nil and Hub.Summer.piloting() end
+local function skipOn() return cfg.wave_skip or forced() end
 if cfg.wave_skip and not skipStopped() then task.spawn(setGameSkip, true) end
+task.delay(3, function() -- Hub.Summer loads after this module
+    if alive() and skipOn() and not skipStopped() then setGameSkip(true) end
+end)
 table.insert(Hub.connections, workspace:WaitForChild("_wave_num").Changed:Connect(function()
-    if cfg.wave_skip and skipStopped() then setGameSkip(false)
+    if skipOn() and skipStopped() then setGameSkip(false)
     -- Seamless replay restarts the wave counter in place; the stop wave turned the setting off, so turn it back on.
-    elseif cfg.wave_skip and sentSkip == false and workspace._wave_num.Value <= 1 then setGameSkip(true) end
+    elseif skipOn() and sentSkip == false and workspace._wave_num.Value <= 1 then setGameSkip(true) end
 end))
 table.insert(Hub.connections, s2c:WaitForChild("start_vote_wave_skip").OnClientEvent:Connect(function()
-    if cfg.wave_skip and not skipStopped() then call("vote_wave_skip") end
+    if skipOn() and not skipStopped() then call("vote_wave_skip") end
 end))
 
 -- Vote start: story auto-starts; other modes wait in "Vote start" until someone votes.
@@ -200,7 +206,7 @@ task.spawn(function()
     vf = vf and vf:WaitForChild("VotingFinished", 10)
     -- Keeps running after voting ends: a seamless replay resets VotingFinished in the same match.
     while alive() and vf do
-        if cfg.vote_start and not vf.Value then pcall(Game.invoke, "vote_start") end
+        if (cfg.vote_start or forced()) and not vf.Value then pcall(Game.invoke, "vote_start") end
         task.wait(2)
     end
 end)

@@ -548,8 +548,54 @@ end
 -- Health / Speed are the ones friends call fine, Regen is harmless with a bleed unit (avoidCard puts it last without one), resists "a no no always".
 local FALLBACK_ORDER = { "Enemy Shield", "Enemy Health", "Enemy Speed", "Enemy Regen", "Random Curses", "Plated Enemies", "Spellproof Enemies", "Resistant Enemies" }
 local function ignored(name, tier) return 500 + (table.find(FALLBACK_ORDER, name) or #FALLBACK_ORDER + 1) * 10 + tier end
-local CARD_MODES = { "Easy", "Medium", "Hard", "Impossible" }
+local CARD_MODES = { "Easy", "Medium", "Hard", "Impossible", "Custom" }
 cfg.cardMode = table.find(CARD_MODES, cfg.cardMode) and cfg.cardMode or "Easy"
+-- Custom preset (friends' request, 2026-11-03): the same kind of priority list as the Game tab's Modifier Priority, kept apart in this tab, plus one entry
+-- for the weather cards (their titles start with an emoji and change with the weather). Rank 1 first; the counter is the most picks per run (0 = no limit).
+local CUSTOM_CARDS = { "Yen I", "Yen II", "Yen III", "Active Cooldown I", "Active Cooldown II", "Active Cooldown III",
+    "Cooldown I", "Cooldown II", "Cooldown III", "Boss Damage I", "Boss Damage II", "Boss Damage III",
+    "Random Blessings I", "Random Blessings II", "Random Blessings III", "Weather Cards", "Enemy Shield I", "Enemy Shield II",
+    "Enemy Shield III", "Explosive Deaths I", "Explosive Deaths II", "Explosive Deaths III", "Random Curses I",
+    "Random Curses II", "Random Curses III", "Enemy Health III", "Enemy Health II", "Enemy Health I",
+    "Enemy Speed III", "Enemy Speed II", "Enemy Speed I", "Enemy Regen III", "Enemy Regen II", "Enemy Regen I",
+    "Attack I", "Attack II", "Attack III", "Range I", "Range II", "Range III", "Double Attack", "New Path",
+    -- the resist cards (seen in the offers log, missing from Nousigi's list); last by default: friends say resists are never worth it
+    "Plated Enemies I", "Plated Enemies II", "Plated Enemies III", "Resistant Enemies I", "Resistant Enemies II", "Resistant Enemies III",
+    "Spellproof Enemies I", "Spellproof Enemies II", "Spellproof Enemies III" }
+-- Every weather card seen in the offers log (2026-11-03), by name; the card's title in game carries the weather emoji in front. { row tag, icon, names }
+local WEATHER_CARDS = {
+    { "Snow", "snowflake", { "Bonfire", "Frostbite", "Hailstorm", "Ice Breaker", "Permafrost", "Whiteout" } },
+    { "Mana", "sparkles", { "Arcane Storm", "Arcane Ward", "Dispel", "Leyline", "Mana Shield", "Mana Surge" } },
+    { "Storm", "cloud-lightning", { "Conductor", "Eye of the Storm", "Lightning Rod", "Squall", "Supercell", "Thunderhead" } },
+    { "Flood", "waves", { "Low Tide", "Rising Tide", "Salvage", "Tidal Surge", "Tsunami" } },
+    { "Star", "star", { "Cosmic Rays", "Doomsday", "Stardust", "Starforged", "Wishing Star" } },
+    { "Rain", "cloud-rain", { "Flash Flood", "Mud", "Rain Barrel", "Torrent", "Washout" } },
+    { "Wind", "wind", { "Crosswind", "Cyclone", "Gale", "Grounded", "Kite Strings" } },
+    { "Sand", "sun", { "Buried Treasure", "Clear Skies", "Dust Devil", "Haboob", "Sand Armor", "Sandblast" } },
+    { "Fire", "flame", { "Cinders", "Firebreak", "Heatwave", "Phoenix", "Scorch" } },
+}
+-- The weather cards have their own list (user, 2026-11-03, for organization): the main list holds one "Weather Cards" row, the position of the whole group among
+-- the standard cards, and Custom Weather Card Priority orders the cards inside the group (cfg.weatherRank). "Other Weather" = a weather card not in the list.
+local WEATHER_OF, WEATHER_LIST = {}, {} -- card name -> { tag, icon, names }; names in list order
+for _, w in WEATHER_CARDS do
+    for _, n in w[3] do WEATHER_OF[n] = w table.insert(WEATHER_LIST, n) end
+end
+table.insert(WEATHER_LIST, "Other Weather")
+cfg.customRank, cfg.customCap, cfg.weatherRank = cfg.customRank or {}, cfg.customCap or {}, cfg.weatherRank or {}
+for n in WEATHER_OF do cfg.customRank[n] = nil end -- an earlier build kept them in the main list
+for i, c in CUSTOM_CARDS do
+    if cfg.customRank[c] == nil then cfg.customRank[c] = i end
+    if cfg.customCap[c] == nil then cfg.customCap[c] = 0 end
+end
+for i, n in WEATHER_LIST do if cfg.weatherRank[n] == nil then cfg.weatherRank[n] = i end end
+-- Row key of a card title: its name without the "+ " / "- " / weather emoji in front; a weather card that is not listed is "Other Weather".
+local function customKey(card)
+    local s = tostring(card)
+    local name = (s:gsub("^[^%w]+", ""))
+    if WEATHER_OF[name] then return name end
+    if (s:byte(1) or 0) > 127 then return "Other Weather" end
+    return name
+end
 -- Enemy Health and Enemy Speed are okay up to a point (friends, user: "about 150%" for health; resist cards never). Each is capped at cfg.<cap> percent
 -- over the run. The amount is read from the offer's effects (format below, verified from the offers log 2026-11-03: Health I / II / III = +50 / 80 / 200 %,
 -- Speed I / II / III = +25 / 50 / 100 %); a capped card whose amount cannot be read is logged and then taken without a cap.
@@ -559,7 +605,7 @@ local OKAY_DEBUFFS = { ["Enemy Regen"] = true, ["Enemy Shield"] = true, ["Enemy 
 local CAPPED = { ["Enemy Health"] = { type = "enemy_stat_mul", stat = "health", cap = "hpCap" }, ["Enemy Speed"] = { type = "enemy_speedup", cap = "speedCap" } }
 cfg.hpCap = tonumber(cfg.hpCap) or 150
 cfg.speedCap = tonumber(cfg.speedCap) or 50 -- guess, no number from the user yet
-local run = { cards = {}, debuffs = 0, total = {} } -- total[card] = percent taken so far this run
+local run = { cards = {}, debuffs = 0, total = {}, picked = {} } -- total[card] = percent taken so far this run, picked[custom key] = picks
 local function amountOf(opt, spec) -- percent a card adds, nil when the offer carries no readable amount
     local sum
     for _, e in type(opt) == "table" and type(opt.effects) == "table" and opt.effects or {} do
@@ -567,11 +613,54 @@ local function amountOf(opt, spec) -- percent a card adds, nil when the offer ca
     end
     return sum
 end
+-- Weather cards (user, 2026-11-03: "do the presets support the weather ones?"). Read from the 44 weather offers in the offers log: a card that gives pearls
+-- (candy_multiplier) is a debuff card and a card without it is free (Ice Breaker boss damage, Leyline, Frostbite -30 % enemy speed, Salvage yen ...).
+-- A debuff weather card is mild when its only harm is more shield / regen / health / speed (Squall, Hailstorm, Permafrost, Mana Shield, Sand Armor ...) and harsh
+-- when it adds resistance, cuts our range or speeds up our cooldowns, flying chance and so on (Whiteout, Supercell, Haboob, Cosmic Rays, Cyclone ...).
+-- UNVERIFIED: the meaning of burst_speed, golem_chance and lightning_strikes (Tidal Surge, Wishing Star, Lightning Rod); the first two count as harsh when paired with pearls.
+local MILD_TYPES = { enemy_shield = true, enemy_regen = true, enemy_stat_mul = true, enemy_speedup = true, candy_multiplier = true, secret_drop = true }
+local GOOD_TYPES = { enemy_amp_specific = true, boss_damage = true, resource_gain = true }
+local function weatherInfo(opt) -- pearls bonus (fraction), mild
+    local pearls, mild = 0, true
+    for _, e in type(opt) == "table" and type(opt.effects) == "table" and opt.effects or {} do
+        if type(e) == "table" then
+            if e.type == "candy_multiplier" then pearls += tonumber(e.amount) or 0 end
+            if (e.type == "enemy_stat_mul" and e.stat ~= "health") or not (MILD_TYPES[e.type] or GOOD_TYPES[e.type]) then mild = false end
+        end
+    end
+    return pearls, mild
+end
+local function isWeatherCard(card) return (tostring(card):byte(1) or 0) > 127 end
+
 function Summer.cardRank(card, opt)
     if not pilotOn() then return nil end
     -- "Double Attack, Double Cooldown" doubles ability cooldowns too and breaks the Auto Commander / Rukia chains (user): last in every preset, picked
     -- only when it is the whole offer. (The "- Cooldown" cards are the other way round: they cut cooldowns.)
     if tostring(card):find("Double Cooldown", 1, true) then return 2e9 end
+    if cfg.cardMode == "Custom" then
+        local key = customKey(card)
+        -- a weather card sits behind its group's row in the main list, in the order of the weather list (that is always under 1 rank apart)
+        if WEATHER_OF[key] or key == "Other Weather" then return 100 + (cfg.customRank["Weather Cards"] or 1000) + (cfg.weatherRank[key] or 1000) / 1000 end
+        local cap = cfg.customCap[key] or 0
+        if cap > 0 and (run.picked[key] or 0) >= cap then return 5e8 end -- over its cap: only when nothing else is offered
+        return 100 + (cfg.customRank[key] or 1000)
+    end
+    if isWeatherCard(card) then
+        local pearls, mild = weatherInfo(opt)
+        if pearls <= 0 then return 250 end -- a free weather card: after the stat buffs, before any debuff
+        local mode, okay = cfg.cardMode, false
+        if mode == "Impossible" then return 50 - pearls * 10 end -- the most pearls first
+        if mode == "Medium" then
+            okay = mild
+            for name, spec in CAPPED do -- its health / speed counts toward the same caps as the standard cards
+                local a = amountOf(opt, spec)
+                if okay and a and a > 0 and (run.total[name] or 0) + a > cfg[spec.cap] then okay = false end
+            end
+        elseif mode == "Hard" then
+            okay = run.debuffs < cfg.tune.L
+        end
+        return okay and 60 or (mild and 525 or 605) -- ignored: the mild ones before the harsh ones, both behind every standard debuff in the fallback
+    end
     local base, tier = parseCard(card)
     for i, n in DEBUFF_ORDER do
         if base == n then
@@ -598,9 +687,14 @@ end
 function Summer.cardPicked(card, wave, offered, opt)
     if not pilotOn() then return end
     table.insert(run.cards, { wave = wave, card = card, offered = offered })
+    run.picked[customKey(card)] = (run.picked[customKey(card)] or 0) + 1
     local base = parseCard(card)
     if table.find(DEBUFF_ORDER, base) then run.debuffs += 1 end
-    if CAPPED[base] then run.total[base] = (run.total[base] or 0) + (amountOf(opt, CAPPED[base]) or 0) end
+    if isWeatherCard(card) and weatherInfo(opt) > 0 then run.debuffs += 1 end -- a pearl weather card is a debuff card for the tuner
+    for name, spec in CAPPED do -- standard and weather cards alike add to the health / speed totals
+        local a = amountOf(opt, spec)
+        if a then run.total[name] = (run.total[name] or 0) + a end
+    end
 end
 
 local bleedOnHotbar
@@ -658,7 +752,7 @@ if not LOBBY then
             if cfg.losses[w] >= 2 then cfg.needVegito[w] = true end
         end
         Core.log(("summer: run %s %s %s waves %s debuff cards %d -> tuner L %d%s"):format(tostring(w), rec.map, victory and "WIN" or "loss", tostring(rec.waves), run.debuffs, cfg.tune.L, cfg.needVegito[w] and " (Vegito pair needed)" or ""))
-        run = { cards = {}, debuffs = 0, total = {} }
+        run = { cards = {}, debuffs = 0, total = {}, picked = {} }
         Core.save_config()
     end) })
 end
@@ -671,11 +765,16 @@ function Summer.pilot(defaults, methods)
     -- Placement order (user: everything placed as soon as possible, only the farms first): farms, then the two carries, the buffer, the support unit last.
     o.order = { 1, 6, 2, 3, 4, 5 }
     o.kind, o.mid, o.slotpos, o.mode_preset = {}, {}, {}, {}
-    -- Follow Teammates (user, 2026-11-03, for runs with other players: matchmaking or a party): the farms are placed at once, the other units wait until
+    -- Follow Teammates (user, 2026-11-03, for Use Matchmaking runs with strangers; not for parties): the farms are placed at once, the other units wait until
     -- cfg.follow.units damage units of the others stand or wave cfg.follow.wave is reached (Bulby is upgraded meanwhile, no cap on farms), then stand
     -- where the others' damage units are (median distance along the lane). Alone in the match nothing is held.
     local Players = game:GetService("Players")
-    local function following() return cfg.follow.enable and #Players:GetPlayers() > 1 and Hub.AutoPlay ~= nil end
+    -- Matchmaking only (user, 2026-11-03): friends running the same script would all wait for each other, so a party, or a Hunt that did not come from
+    -- the Use Matchmaking queue, places normally.
+    local function following()
+        return cfg.follow.enable and cfg.matchmaking and #Players:GetPlayers() > 1 and Hub.AutoPlay ~= nil
+            and not (Hub.Party and Hub.Party.size() >= 2)
+    end
     o.wave = setmetatable({}, { __index = function(_, slot)
         if not following() then return 0 end
         local id = slotUnit(slot)
@@ -716,10 +815,10 @@ if Tabs then
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather, joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
     hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
-    hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "With other players in the match: farms go down at once, the other units wait for the teammates' damage units (or the wave below), then stand where theirs stand along the path. Alone nothing changes.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() end })
+    hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "Only with Use Matchmaking on and no party: farms go down at once, the other units wait for the other players' damage units (or the wave below), then stand where theirs stand along the path. In a party or with friends your units place normally.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() end })
     hunt_box:AddSlider("SummerFollowUnits", { Text = "Wait for Teammate Units", Tooltip = "Damage units of the other players to wait for before placing yours.", Default = cfg.follow.units, Min = 1, Max = 12, Rounding = 0, Callback = function(v) cfg.follow.units = v Core.save_config() end })
     hunt_box:AddSlider("SummerFollowWave", { Text = "Place Anyway at Wave", Tooltip = "Your units are placed at this wave even when the teammates have not placed enough.", Default = cfg.follow.wave, Min = 1, Max = 30, Rounding = 0, Callback = function(v) cfg.follow.wave = v Core.save_config() end })
-    hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
+    hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward. Custom: your own order from Custom Card Priority.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
     hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
     hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })
     local status = hunt_box:AddLabel("Weather: -", true)
@@ -735,6 +834,71 @@ if Tabs then
                 pcall(function() plan:SetText("Plan: " .. (pok and text or "-")) end)
                 task.wait(30)
             end
+        end)
+    end
+
+    -- Custom card preset: the list the Custom entry of Card Preset follows.
+    if Hub.UIKit then
+        local cbox = Tabs.Summer:AddRightGroupbox("Custom Card Priority", "list-ordered")
+        cbox:AddLabel("Used when Card Preset is Custom. The first card is picked first. Type a number in the left box and press Enter to move a card there; Shift + arrow moves 5, Ctrl + arrow goes to the top or bottom. Weather Cards covers every weather card.", true)
+        -- Short row names (the "Enemy" prefix is on 21 of the 42 cards) and the Game tab's card icons, so a narrow window still shows what each row is.
+        local ICONS = { { "Yen", "coins" }, { "Active Cooldown", "timer-reset" }, { "Cooldown", "timer" }, { "Boss", "skull" }, { "Blessings", "sparkles" }, { "Shield", "shield" },
+            { "Explosive", "bomb" }, { "Curses", "ghost" }, { "Health", "heart" }, { "Speed", "gauge" }, { "Regen", "heart-pulse" }, { "Double", "zap" }, { "Attack", "swords" },
+            { "Range", "crosshair" }, { "New Path", "route" }, { "Weather", "cloud-sun" } }
+        local items = {}
+        for _, c in CUSTOM_CARDS do
+            local ic, text = nil, (c:gsub("^Enemy ", ""):gsub("Random ", "Rnd. "):gsub(" Enemies", ""))
+            if c == "Weather Cards" then ic, text = "cloud-sun", "Weather Cards (list below)"
+            else for _, p in ICONS do if c:find(p[1], 1, true) then ic = p[2] break end end end
+            items[#items + 1] = { key = c, text = text, icon = ic }
+        end
+        local list
+        list = Hub.UIKit.rankList(lib, cbox, "SummerCardPriorityList", {
+            items = items,
+            get = function()
+                local keys = table.clone(CUSTOM_CARDS)
+                table.sort(keys, function(a, b)
+                    local ra, rb = cfg.customRank[a] or 1000, cfg.customRank[b] or 1000
+                    if ra ~= rb then return ra < rb end
+                    return table.find(CUSTOM_CARDS, a) < table.find(CUSTOM_CARDS, b)
+                end)
+                return keys
+            end,
+            set = function(keys) for i, c in keys do cfg.customRank[c] = i end Core.save_config() end,
+            -- no - N + counter here: in this column it left 68 px for the name (measured); per-card caps stay in cfg.customCap (all 0 = no limit)
+        })
+        cbox:AddButton("Reset Custom Priority", function()
+            for i, c in CUSTOM_CARDS do cfg.customRank[c] = i cfg.customCap[c] = 0 end
+            Core.save_config()
+            list.refresh()
+        end)
+
+        -- The weather cards, ordered among themselves; where the group stands is the Weather Cards row above.
+        local wbox = Tabs.Summer:AddRightGroupbox("Custom Weather Card Priority", "cloud-sun")
+        wbox:AddLabel("Part of the Custom preset: the order of the weather cards among themselves. The Weather Cards row in the list above sets where the whole group stands. Other Weather is any weather card not listed.", true)
+        local witems = {}
+        for _, n in WEATHER_LIST do
+            local w = WEATHER_OF[n]
+            witems[#witems + 1] = { key = n, text = w and (w[1] .. ": " .. n) or "Other Weather", icon = w and w[2] or "cloud-sun" }
+        end
+        local wlist
+        wlist = Hub.UIKit.rankList(lib, wbox, "SummerWeatherPriorityList", {
+            items = witems,
+            get = function()
+                local keys = table.clone(WEATHER_LIST)
+                table.sort(keys, function(a, b)
+                    local ra, rb = cfg.weatherRank[a] or 1000, cfg.weatherRank[b] or 1000
+                    if ra ~= rb then return ra < rb end
+                    return table.find(WEATHER_LIST, a) < table.find(WEATHER_LIST, b)
+                end)
+                return keys
+            end,
+            set = function(keys) for i, c in keys do cfg.weatherRank[c] = i end Core.save_config() end,
+        })
+        wbox:AddButton("Reset Weather Priority", function()
+            for i, n in WEATHER_LIST do cfg.weatherRank[n] = i end
+            Core.save_config()
+            wlist.refresh()
         end)
     end
 

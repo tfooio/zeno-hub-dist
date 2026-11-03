@@ -1271,6 +1271,16 @@ local function pickUpgrade(list, money, rate)
     local first = list[1]
     if not first or money >= first.cost then return first end
     if first.prio and (first.cost - money) / rate <= 20 then return first end -- save up for the fusion path instead of buying cheaper units first
+    -- Carrot and Vego to level 7 come before every other unit (user, 2026-11-03: a Hunt upgraded Rukia and Berserker while they sat at 3 to 6): while one of
+    -- them is below the fusion level only farms and the pair itself are bought, however far off the next level is.
+    if fuseOn() then
+        local pending
+        for _, e in list do if e.prio and (e.id == FUSE_CARROT or e.id == FUSE_VEGO) then pending = true break end end
+        if pending then
+            for _, e in list do if money >= e.cost and (e.isfarm or e.prio) then return e end end
+            return first
+        end
+    end
     if cfg.method == METHODS[4] then -- Custom order: One at a time waits for the first unit, otherwise the first affordable in the list's order
         if not cfg.upgrade_one then for _, e in list do if money >= e.cost then return e end end end
         return first

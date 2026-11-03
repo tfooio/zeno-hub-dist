@@ -56,24 +56,42 @@ function Kit.rankList(lib, box, id, o)
         return b
     end
 
-    local function move(k, dir)
+    -- Move the row at k to position to (the rows in between shift by one).
+    local function moveTo(k, to)
         local keys = order()
-        if not keys[k + dir] then return end
-        keys[k], keys[k + dir] = keys[k + dir], keys[k]
+        to = math.clamp(math.floor(to), 1, #keys)
+        if to == k then return L.refresh() end
+        table.insert(keys, to, table.remove(keys, k))
         o.set(keys)
         L.refresh()
+    end
+    -- Arrow: one step; Shift: five; Ctrl: straight to the top / bottom (a 40-row list is slow one step at a time).
+    local UIS = game:GetService("UserInputService")
+    local function move(k, dir)
+        local step = 1
+        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift) then step = 5 end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl) then step = 1e6 end
+        moveTo(k, k + dir * step)
     end
     local reserve = 60 + (o.counter and 76 or 0)
     for k, it in o.items do
         local r = { k = k }
         r.frame = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = S.MainColor, LayoutOrder = k }, frame)
         new("UICorner", { CornerRadius = UDim.new(0, 8) }, r.frame)
-        r.num = new("TextLabel", { Size = UDim2.fromOffset(22, 22), Position = UDim2.new(0, 5, 0.5, -11), BackgroundColor3 = S.OutlineColor, TextColor3 = S.FontColor, TextSize = 13, FontFace = S.Font }, r.frame)
+        -- The number is a box: type where the card should go and press Enter (it jumps there, the rows in between shift).
+        r.num = new("TextBox", { Size = UDim2.fromOffset(22, 22), Position = UDim2.new(0, 5, 0.5, -11), BackgroundColor3 = S.OutlineColor, TextColor3 = S.FontColor, TextSize = 13, FontFace = S.Font,
+            ClearTextOnFocus = true, PlaceholderText = "", BorderSizePixel = 0 }, r.frame)
         new("UICorner", { CornerRadius = UDim.new(0, 6) }, r.num)
+        r.num.FocusLost:Connect(function()
+            local n = tonumber(r.num.Text)
+            if n and r.k and rows[r.k] == r then moveTo(r.k, n) else L.refresh() end
+        end)
         r.pic = icon(lib, it.icon, 18, r.frame, 33)
         local nameX = r.pic and 56 or 36
         r.name = new("TextLabel", { Position = UDim2.fromOffset(nameX, 0), Size = UDim2.new(1, -(nameX + reserve), 1, 0), BackgroundTransparency = 1, Text = it.text, TextColor3 = S.FontColor,
-            TextSize = 14, FontFace = S.Font, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd }, r.frame)
+            TextSize = 14, TextScaled = true, FontFace = S.Font, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd }, r.frame)
+        -- a narrow window shrinks the name (down to 9) before it is cut short
+        new("UITextSizeConstraint", { MaxTextSize = 14, MinTextSize = 9 }, r.name)
         r.up, r.down = arrow("chevron-up", "^", -30, r.frame), arrow("chevron-down", "v", -6, r.frame)
         if o.counter then
             local c = o.counter

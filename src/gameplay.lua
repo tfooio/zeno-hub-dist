@@ -242,7 +242,7 @@ if Tabs then
     local mod = T:AddRightGroupbox("Auto Modifier", "layers")
     mod:AddToggle("ModAuto", { Text = "Auto Select Modifier", Tooltip = "Pick the offered modifier with the best priority (lowest number) that is under its cap.", Default = cfg.modifier.enable, Callback = set(cfg.modifier, "enable") })
     local prio = T:AddRightGroupbox("Modifier Priority", "list-ordered")
-    prio:AddLabel("The first card is picked first. - N + is the most picks per run (0 = no limit).", true)
+    prio:AddLabel("The first card is picked first. - N + is the most picks per run (0 = no limit). Type a number in the left box and press Enter to move a card there; Shift + arrow moves 5, Ctrl + arrow goes to the top or bottom.", true)
     local CARD_ICONS = { { "Yen", "coins" }, { "Active Cooldown", "timer-reset" }, { "Cooldown", "timer" }, { "Boss", "skull" }, { "Blessings", "sparkles" }, { "Shield", "shield" },
         { "Explosive", "bomb" }, { "Curses", "ghost" }, { "Health", "heart" }, { "Speed", "gauge" }, { "Regen", "heart-pulse" }, { "Double", "zap" }, { "Attack", "swords" },
         { "Range", "crosshair" }, { "New Path", "route" } }
@@ -403,7 +403,9 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
             end
         end
     end)
-    if not (cfg.modifier.enable and options) then return end
+    -- An autopilot Summer Hunt votes whatever the Auto Select Modifier toggle says (a friend with the toggle off got no votes at all, 2026-11-03).
+    local pilot = Hub.Summer and Hub.Summer.piloting()
+    if not ((cfg.modifier.enable or pilot) and options) then return end
     local best, bestRank
     for slot, v in options do
         local c = cardOf(v.title)
