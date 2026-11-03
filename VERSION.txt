@@ -1,2 +1,2 @@
-6fe0e62 2026-11-03
-Stall watchdog: lobby retry and rejoin, match stall rejoin, recovered report, Hunt summary webhook
+fe97201 2026-11-03
+Summer: matchmaking Hunts always return to the lobby after a run, never replay

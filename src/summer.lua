@@ -495,6 +495,8 @@ local function inHunt()
 end
 function Summer.want_lobby()
     if not (cfg.enable and not LOBBY and inHunt()) then return false end
+    -- Use Matchmaking (user, 2026-11-03): every run ends in the lobby, never a replay with the same strangers (runs 90, 93, 95 replayed in place).
+    if cfg.matchmaking then return true end
     return math.floor(workspace:GetServerTimeNow() / 3600) ~= hourAtLoad
 end
 
