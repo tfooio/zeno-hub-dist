@@ -1,2 +1,2 @@
-cad0986 2026-11-03
-Summer multi farm: party host/member roles, party team, Vegito solo team, member Start press, card text log
+4082c07 2026-11-03
+Matchmaking: per-joiner Use Matchmaking toggle (World, Legend, Raid, Challenge, Daily, Mansion, Summer Hunt), game captcha read and typed each time

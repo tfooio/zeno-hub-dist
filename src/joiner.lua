@@ -1,6 +1,6 @@
 -- Joiners (Joiner tab): World, Legend, Raid, Challenge, Daily Challenge from lobby pads (docs/features/joiners.md).
 -- Options live in Core.config.joiner (hub.json) so they apply after every teleport back to the lobby.
--- Pads only (solo, friendsOnly); no matchmaking (it has a captcha path we do not touch).
+-- Pads (solo, friendsOnly) by default; each mode with a "Use Matchmaking" toggle goes through Joiner.matchmake instead (fills the game's captcha).
 local Hub = ...
 local Core, Game = Hub.Core, Hub.Game
 local env = getgenv()
@@ -85,7 +85,27 @@ local function rewardItems(c)
     return out
 end
 
--- Each returns { pad folder, level id (nil = pad preset by the server), difficulty, tag } or nil + reason.
+-- Matchmaking (user, 2026-11-03): the game draws a random 5-7 character code (digits or letters, new each time) on the client and checks it in
+-- its own popup (NotificationWindowsUI._show_matchmaking_captcha), so we go through that popup: read the code it shows, type it into its box and
+-- press Yes; the popup then sends request_matchmaking(id). A code accepted within 300 s skips the window; a second try within 30 s is refused by the game.
+function Joiner.matchmake(id)
+    local ui = Game.loader().load_client_service(script, "GUIService").notification_windows_ui
+    local sent
+    ui:show_matchmaking_popup({ _SkipFirst = true, OnFinish = function() end, OnMatchmaking = function() sent = true Game.invoke("request_matchmaking", id) end })
+    for _ = 1, 40 do
+        local w = ui.Popups:FindFirstChild("CaptchaWindow")
+        if w and w.Captcha.Text ~= "" and w.TypeBox.Text == "" then
+            w.TypeBox.Text = w.Captcha.Text
+            -- Fire inside task.spawn: the game's handler yields.
+            for _, c in getconnections(w.ButtonHolder.Yes.Activated) do task.spawn(c.Fire, c) end
+        end
+        if sent then return true end
+        task.wait(0.25)
+    end
+    return false
+end
+
+-- Each returns { pad folder, level id (nil = pad preset by the server), difficulty, tag, mm = matchmaking id } or nil + reason.
 local modes = {}
 function modes.challenge()
     local c = Game.invoke("get_normal_challenge")
@@ -98,28 +118,28 @@ function modes.challenge()
         for id in want do if items[id] then hit = true end end
         if not hit then return nil, "reward not wanted" end
     end
-    return { folder = workspace._CHALLENGES.Challenges, tag = c.current_uuid }
+    return { folder = workspace._CHALLENGES.Challenges, tag = c.current_uuid, mm = "__NORMAL_CHALLENGE" }
 end
 function modes.daily()
     local c = Game.invoke("get_daily_challenge")
     local tag = c and c.current_level and c.current_level._override_random_seed
     if not tag then return nil, "no daily" end
     if cfg.daily.done == tag then return nil, "done" end
-    return { folder = workspace._CHALLENGES.DailyChallenge, tag = tag }
+    return { folder = workspace._CHALLENGES.DailyChallenge, tag = tag, mm = "__DAILY_CHALLENGE" }
 end
 function modes.raid()
     local wid = kinds.raid[cfg.raid.world or ""]
     if not wid then return nil, "no world" end
     local lv = levelOf(wid, cfg.raid.level)
     if not lv or not unlocked(lv) then return nil, "locked" end
-    return { folder = workspace._RAID.Raid, level = lv, diff = "Hard" }
+    return { folder = workspace._RAID.Raid, level = lv, diff = "Hard", mm = Levels[lv]._MATCHMAKING and lv or nil }
 end
 function modes.legend()
     local wid = kinds.legend[cfg.legend.world or ""]
     if not wid then return nil, "no world" end
     local lv = levelOf(wid, cfg.legend.stage)
     if not lv or not unlocked(lv) then return nil, "locked" end
-    return { folder = workspace._LOBBIES.Story, level = lv, diff = "Hard" }
+    return { folder = workspace._LOBBIES.Story, level = lv, diff = "Hard", mm = Levels[lv]._MATCHMAKING and lv or nil }
 end
 function modes.world()
     local w = cfg.world
@@ -142,14 +162,17 @@ function modes.world()
     elseif w.hard and hardUnlocked(lv) then
         diff = "Hard"
     end
-    return { folder = workspace._LOBBIES.Story, level = lv, diff = diff }
+    return { folder = workspace._LOBBIES.Story, level = lv, diff = diff, mm = Levels[lv]._MATCHMAKING and lv or nil }
 end
 
 -- No pad: the game's own start button calls request_start_infinite_tower(floor, difficulty) (decompiled).
 function modes.mansion()
     local pd = Game.profile()
     local t = pd and pd.level_data and pd.level_data.infinite_tower
-    return { direct = { "request_start_infinite_tower", t and t.floor_reached or 1, cfg.mansion.hard and "Hard" or "Normal" } }
+    local floor, diff = t and t.floor_reached or 1, cfg.mansion.hard and "Hard" or "Normal"
+    -- Mansion rooms 1 to 100 are multiplayer (update notes); higher rooms stay solo.
+    local mm = floor <= 100 and Game.loader().load_core_service(script, "InfiniteTowerServiceCore").make_room_id(floor, diff) or nil
+    return { direct = { "request_start_infinite_tower", floor, diff }, mm = mm }
 end
 
 -- Portal: use_portal(itemUuid, {friends_only=true}) puts a ready pad (_PORTALS.Lobbies) under our name, request_start_game(pad)
@@ -266,6 +289,25 @@ local function try(mode)
     local ok, plan, why = pcall(modes[mode])
     if not ok then Core.log("ERROR joiner", mode, plan) return false end
     if not plan then return false, why end
+    if plan.mm and cfg[mode].mm then
+        equipTeam(mode)
+        Core.log("joiner", mode, "matchmaking", plan.mm)
+        if plan.tag then cfg[mode].done = plan.tag end
+        Core.save_config()
+        backoff[mode] = os.clock() + 35 -- the game refuses a second matchmaking try within 30 s
+        if not Joiner.matchmake(plan.mm) then
+            Core.log("joiner: matchmaking not entered", mode)
+            if plan.tag then cfg[mode].done = nil end
+            return false
+        end
+        task.wait(120) -- UNVERIFIED: how long a queue can take; leave it and let the next try start fresh
+        if alive() then
+            Core.log("joiner: no match found, leaving matchmaking", mode)
+            pcall(Game.invoke, "leave_matchmaking")
+            if plan.tag then cfg[mode].done = nil end
+        end
+        return true
+    end
     if plan.direct then
         equipTeam(mode)
         Core.log("joiner", mode, table.unpack(plan.direct, 2))
@@ -383,31 +425,37 @@ if Tabs then
         end })
     end
 
+    local MM_TIP = "Queues in Global Matchmaking instead of a solo pad; the hub types the game's captcha for you. Levels without matchmaking still use the pad."
     local world = T:AddLeftGroupbox("World Joiner", "globe")
     world:AddToggle("JoinWorld", { Text = "Auto Join World", Default = cfg.world.enable, Callback = set(cfg.world, "enable") })
     world:AddDropdown("JoinWorldWorld", { Text = "Select World", Values = names("story"), Default = cfg.world.world, AllowNull = true, Callback = set(cfg.world, "world") })
     world:AddDropdown("JoinWorldAct", { Text = "Select Act", Values = { "Act 1", "Act 2", "Act 3", "Act 4", "Act 5", "Act 6", "Infinite" }, Default = cfg.world.act, Callback = set(cfg.world, "act") })
     world:AddToggle("JoinWorldHard", { Text = "Hard Mode", Default = cfg.world.hard, Callback = set(cfg.world, "hard") })
+    world:AddToggle("JoinWorldMM", { Text = "Use Matchmaking", Tooltip = MM_TIP .. " Only Infinite acts support it.", Default = cfg.world.mm, Callback = set(cfg.world, "mm") })
     world:AddToggle("JoinWorldHighest", { Text = "Join Highest", Tooltip = "Furthest unlocked story act; ignores Select World / Act.", Default = cfg.world.highest, Callback = set(cfg.world, "highest") })
 
     local legend = T:AddLeftGroupbox("Legend Joiner", "crown")
     legend:AddToggle("JoinLegend", { Text = "Auto Join Legend", Default = cfg.legend.enable, Callback = set(cfg.legend, "enable") })
     legend:AddDropdown("JoinLegendWorld", { Text = "Select World", Values = names("legend"), Default = cfg.legend.world, AllowNull = true, Callback = set(cfg.legend, "world") })
     legend:AddDropdown("JoinLegendStage", { Text = "Select Stage", Values = { "Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6" }, Default = cfg.legend.stage, Callback = set(cfg.legend, "stage") })
+    legend:AddToggle("JoinLegendMM", { Text = "Use Matchmaking", Tooltip = MM_TIP, Default = cfg.legend.mm, Callback = set(cfg.legend, "mm") })
 
     local raid = T:AddRightGroupbox("Raid Joiner", "swords")
     raid:AddToggle("JoinRaid", { Text = "Auto Join Raid", Default = cfg.raid.enable, Callback = set(cfg.raid, "enable") })
     raid:AddDropdown("JoinRaidWorld", { Text = "Select World", Values = names("raid"), Default = cfg.raid.world, AllowNull = true, Callback = set(cfg.raid, "world") })
     raid:AddDropdown("JoinRaidLevel", { Text = "Select Level", Values = { "Level 1", "Level 2", "Level 3", "Level 4", "Level 5" }, Default = cfg.raid.level, Callback = set(cfg.raid, "level") })
+    raid:AddToggle("JoinRaidMM", { Text = "Use Matchmaking", Tooltip = MM_TIP, Default = cfg.raid.mm, Callback = set(cfg.raid, "mm") })
 
     local REWARDS = { "StarFruit", "StarFruitGreen", "StarFruitRed", "StarFruitPink", "StarFruitBlue", "StarFruitEpic", "star_remnant" }
     local chal = T:AddRightGroupbox("Challenge Joiner", "trophy")
     chal:AddToggle("JoinChallenge", { Text = "Auto Join Challenge", Default = cfg.challenge.enable, Callback = set(cfg.challenge, "enable") })
     chal:AddDropdown("JoinChallengeReward", { Text = "Select Reward", Tooltip = "Join only if the current challenge gives one of these. None selected = any. StarFruitEpic = Rainbow.", Values = REWARDS, Multi = true, Default = Core.keys(cfg.challenge.rewards), Callback = multi(cfg.challenge, "rewards") })
+    chal:AddToggle("JoinChallengeMM", { Text = "Use Matchmaking", Tooltip = MM_TIP, Default = cfg.challenge.mm, Callback = set(cfg.challenge, "mm") })
 
     local mansion = T:AddRightGroupbox("Infinity Mansion Joiner", "castle")
     mansion:AddToggle("JoinMansion", { Text = "Auto Join Infinity Mansion", Tooltip = "Starts the highest room reached.", Default = cfg.mansion.enable, Callback = set(cfg.mansion, "enable") })
     mansion:AddToggle("JoinMansionHard", { Text = "Hard Mode", Default = cfg.mansion.hard, Callback = set(cfg.mansion, "hard") })
+    mansion:AddToggle("JoinMansionMM", { Text = "Use Matchmaking", Tooltip = MM_TIP .. " Rooms 1 to 100 only; higher rooms stay solo.", Default = cfg.mansion.mm, Callback = set(cfg.mansion, "mm") })
 
     local seen, PORTALS = {}, {}
     for _, d in Game.data("Items") do
@@ -421,7 +469,8 @@ if Tabs then
     portal:AddDropdown("JoinPortalSelect", { Text = "Select Portal", Tooltip = "Only these portals are opened. Empty = none.", Values = PORTALS, Multi = true, Default = Core.keys(cfg.portal.portals), Callback = multi(cfg.portal, "portals") })
 
     local daily = T:AddRightGroupbox("Daily Challenge Joiner", "calendar")
-    daily:AddToggle("JoinDaily", { Text = "Auto Join Daily Challenge", Tooltip = "Solo, from the daily pad (no matchmaking).", Default = cfg.daily.enable, Callback = set(cfg.daily, "enable") })
+    daily:AddToggle("JoinDaily", { Text = "Auto Join Daily Challenge", Tooltip = "Solo, from the daily pad.", Default = cfg.daily.enable, Callback = set(cfg.daily, "enable") })
+    daily:AddToggle("JoinDailyMM", { Text = "Use Matchmaking", Tooltip = MM_TIP, Default = cfg.daily.mm, Callback = set(cfg.daily, "mm") })
 end
 
 Joiner.modes, Joiner.highest, Joiner.unlocked = modes, highest, unlocked

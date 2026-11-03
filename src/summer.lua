@@ -181,11 +181,14 @@ function Summer.plan(w, owned, party)
         -- Party team (user, from friends, 2026-11-03: "best team, +100% reward boost"): Bulby, Elyssia, Zombie (Giselle), Aqua, the best pearl-boost unit
         -- and the buffer. Slots 2 and 3 are upgraded last, so the weaker two sit there. A unit that is not owned or still level 1 is replaced by a damage dealer.
         local function pick(ids) for _, id in ids do if cands[id] and not used[id] and usable(cands[id]) then return take(cands[id]) end end end
-        local function any() return take(carry(function(c) return dps(c) and usable(c) end)) end
+        local function any() -- evolved units first, an unevolved one only when no evolved damage dealer is left
+            return take(carry(function(c) return dps(c) and usable(c) and not evolvesTo[c.id] end) or carry(function(c) return dps(c) and usable(c) end))
+        end
         d1 = pick({ "elyssia_evolved", "elyssia" }) or any()
-        d2 = pick({ "giselle_evolved", "giselle" }) or any()
+        d2 = pick({ "giselle_evolved" }) or any() -- user, 2026-11-03: Zombie only evolved, never the unevolved copy
         local aqua = pick({ "aqua_evolved", "aqua" }) or any()
-        local booster = take(carry(function(c) return dps(c) and usable(c) end))
+        -- the pearl-bonus unit must be evolved too (user): an unevolved unit that can still evolve never gets the slot
+        local booster = take(carry(function(c) return dps(c) and usable(c) and not evolvesTo[c.id] end))
         if aqua then team[2] = aqua.id end
         if booster then team[3] = booster.id table.insert(notes, ("pearl bonus unit +%d%%"):format(boost(booster))) end
         if d1 then team[4] = d1.id end
@@ -333,7 +336,12 @@ local function hunt()
         return
     end
     Core.save_config()
-    Core.log("summer: joining the Hunt,", weatherName(w))
+    Core.log("summer: joining the Hunt,", weatherName(w), cfg.matchmaking and "(matchmaking)" or "")
+    if cfg.matchmaking and Hub.Joiner then
+        busyUntil = os.clock() + 120 -- a queue can take a while; the lobby teleports us when it finds a match
+        if not Hub.Joiner.matchmake("summer2_event") then Core.log("summer: matchmaking not entered") busyUntil = os.clock() + 35 end
+        return
+    end
     call("request_join_lobby", PAD)
     task.wait(1.5)
     call("request_start_game", PAD)
@@ -529,6 +537,10 @@ end
 -- Card presets (user, from friends' advice 2026-11-02), cfg.cardMode: Easy = buffs only; Medium = also Enemy Regen and Enemy Shield (the only
 -- debuffs that are okay), first so they pay out; Hard = the tuner above; Impossible = every debuff first, highest tier, for the biggest reward.
 -- A debuff the preset ignores is ranked last, so it is only picked when nothing else is offered.
+-- Fallback when a preset ignores every card offered (user, 2026-11-03): the debuff that hurts least comes first, the lowest tier of it first. Shield and
+-- Health / Speed are the ones friends call fine, Regen is harmless with a bleed unit (avoidCard puts it last without one), resists "a no no always".
+local FALLBACK_ORDER = { "Enemy Shield", "Enemy Health", "Enemy Speed", "Enemy Regen", "Random Curses", "Plated Enemies", "Spellproof Enemies", "Resistant Enemies" }
+local function ignored(name, tier) return 500 + (table.find(FALLBACK_ORDER, name) or #FALLBACK_ORDER + 1) * 10 + tier end
 local CARD_MODES = { "Easy", "Medium", "Hard", "Impossible" }
 cfg.cardMode = table.find(CARD_MODES, cfg.cardMode) and cfg.cardMode or "Easy"
 -- Enemy Health and Enemy Speed are okay up to a point (friends, user: "about 150%" for health; resist cards never). Each is capped at cfg.<cap> percent
@@ -565,10 +577,10 @@ function Summer.cardRank(card, opt)
                     if not pct then Core.log("summer: " .. n .. " card without a readable amount, cap not applied") end
                     if pct and (run.total[n] or 0) + pct > cfg[capped.cap] then okay = false end
                 end
-                return (okay and 50 or 500) + i * 10 + (4 - tier)
+                return okay and (50 + i * 10 + (4 - tier)) or ignored(n, tier)
             end
-            if mode == "Easy" then return 500 + i * 10 + tier end
-            return (run.debuffs < cfg.tune.L and 50 or 500) + i * 10 + tier
+            if mode == "Easy" then return ignored(n, tier) end
+            return run.debuffs < cfg.tune.L and (50 + i * 10 + tier) or ignored(n, tier)
         end
     end
     for i, n in BUFF_ORDER do if base == n then return 100 + i * 10 + (4 - tier) end end -- a higher tier of a buff first
@@ -669,6 +681,7 @@ if Tabs then
     local lib = Hub.UI.Library
     local hunt_box = Tabs.Summer:AddLeftGroupbox("Summer Hunt", "sun")
     if not LOBBY then hunt_box:AddLabel("Works in the lobby only (saved here).", true) end
+    hunt_box:AddToggle("SummerMM", { Text = "Use Matchmaking", Tooltip = "Queues in Global Matchmaking instead of the solo pad; the hub types the game's captcha for you.", Default = cfg.matchmaking, Callback = function(v) cfg.matchmaking = v Core.save_config() end })
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather, joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
     hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
