@@ -125,7 +125,7 @@ local function weatherFactor(w, r)
 end
 
 -- Returns { Bulby, Rukia, bleed unit, DPS 1, DPS 2, buffer } as unit ids ("" = nothing), and a text for the log.
-function Summer.plan(w, owned)
+function Summer.plan(w, owned, party)
     owned = owned or profile().collection.owned_units
     local cands = {}
     for _, o in owned do
@@ -176,26 +176,50 @@ function Summer.plan(w, owned)
     local bleeder = take(best(function(c) return c.r.bleed and usable(c) end))
     if bleeder then team[3] = bleeder.id end
 
-    -- DPS: the carries with the most pearl bonus (see carry); Blizzard needs a fire unit. The Vegito pair is used only for a weather that could not be
-    -- cleared without it (cfg.needVegito, set by the run logger after two losses in a row there; user: currency first unless the stage is not beatable).
-    local fire = carry(function(c) return c.r.fire and dps(c) and usable(c) end)
-    local carrot, vego = cands[CARROT], cands[VEGO]
     local d1, d2
-    if cfg.needVegito[w] and carrot and vego and usable(carrot) and usable(vego) and not (w == "snow" and fire) then
-        d1, d2 = take(carrot), take(vego)
-        table.insert(notes, "Vegito pair (needed)")
+    if party then
+        -- Party team (user, from friends, 2026-11-03: "best team, +100% reward boost"): Bulby, Elyssia, Zombie (Giselle), Aqua, the best pearl-boost unit
+        -- and the buffer. Slots 2 and 3 are upgraded last, so the weaker two sit there. A unit that is not owned or still level 1 is replaced by a damage dealer.
+        local function pick(ids) for _, id in ids do if cands[id] and not used[id] and usable(cands[id]) then return take(cands[id]) end end end
+        local function any() return take(carry(function(c) return dps(c) and usable(c) end)) end
+        d1 = pick({ "elyssia_evolved", "elyssia" }) or any()
+        d2 = pick({ "giselle_evolved", "giselle" }) or any()
+        local aqua = pick({ "aqua_evolved", "aqua" }) or any()
+        local booster = take(carry(function(c) return dps(c) and usable(c) end))
+        if aqua then team[2] = aqua.id end
+        if booster then team[3] = booster.id table.insert(notes, ("pearl bonus unit +%d%%"):format(boost(booster))) end
+        if d1 then team[4] = d1.id end
+        if d2 then team[5] = d2.id end
+        table.insert(notes, "party")
     else
-        if w == "snow" and fire then d1 = take(fire) end
-        d1 = d1 or take(carry(function(c) return dps(c) and usable(c) end))
-        d2 = take(carry(function(c) return dps(c) and usable(c) end))
-        if d1 and d2 then table.insert(notes, ("pearl bonus %d%%"):format(boost(d1) + boost(d2))) end
-    end
-    if d1 then team[4] = d1.id end
-    if d2 then team[5] = d2.id end
-    for _, slot in { 2, 3 } do -- no Rukia / no bleed unit owned: a damage dealer instead
-        if team[slot] == "" then
-            local d3 = take(carry(function(c) return dps(c) and usable(c) end))
-            if d3 then team[slot] = d3.id end
+        -- Support slots (user, 2026-11-02: no C.E.O., money is not a problem): Rukia in slot 2 and a bleed unit in slot 3, every weather. Rukia is the
+        -- only slow unit; a missing one falls back to a damage dealer below.
+        for _, id in SLOW_FIRST do
+            if cands[id] and not used[id] and usable(cands[id]) then team[2] = take(cands[id]).id break end
+        end
+        local bleeder = take(best(function(c) return c.r.bleed and usable(c) end))
+        if bleeder then team[3] = bleeder.id end
+
+        -- DPS: solo plays the Vegito pair (user, 2026-11-03: "solo, still prioritize Vegito"); without both of them, or in Blizzard with a fire unit
+        -- owned, the carries with the most pearl bonus (see carry).
+        local fire = carry(function(c) return c.r.fire and dps(c) and usable(c) end)
+        local carrot, vego = cands[CARROT], cands[VEGO]
+        if carrot and vego and usable(carrot) and usable(vego) and not (w == "snow" and fire) then
+            d1, d2 = take(carrot), take(vego)
+            table.insert(notes, "Vegito pair")
+        else
+            if w == "snow" and fire then d1 = take(fire) end
+            d1 = d1 or take(carry(function(c) return dps(c) and usable(c) end))
+            d2 = take(carry(function(c) return dps(c) and usable(c) end))
+            if d1 and d2 then table.insert(notes, ("pearl bonus %d%%"):format(boost(d1) + boost(d2))) end
+        end
+        if d1 then team[4] = d1.id end
+        if d2 then team[5] = d2.id end
+        for _, slot in { 2, 3 } do -- no Rukia / no bleed unit owned: a damage dealer instead
+            if team[slot] == "" then
+                local d3 = take(carry(function(c) return dps(c) and usable(c) end))
+                if d3 then team[slot] = d3.id end
+            end
         end
     end
 
@@ -213,13 +237,20 @@ function Summer.plan(w, owned)
     return team, ("%s: %s%s"):format(weatherName(w), table.concat(names, ", "), #notes > 0 and (" (" .. table.concat(notes, ", ") .. ")") or "")
 end
 
+-- Multi farming (user, 2026-11-03): cfg.role "Host" invites the listed players (Joiner > Party Farming) into a party and starts the Hunt for it,
+-- "Member" accepts the invite and only equips the party team; a party of two or more plays the party team, alone the Vegito team.
+-- UNVERIFIED: that the Summer Hunt pad takes a party (party_pulled_into_lobby is the game's own event for pulling members along).
+cfg.role = (cfg.role == "Host" or cfg.role == "Member") and cfg.role or "Off"
+function Summer.partyActive() return cfg.role ~= "Off" and Hub.Party ~= nil and Hub.Party.size() >= 2 end
+function Summer.member() return cfg.enable and cfg.role == "Member" end -- src/match.lua: the host decides what happens at match end
+
 -- The team to use for a weather: the saved one when Use My Saved Teams is on and it exists, else the planner's.
 local function teamFor(w)
     if cfg.manual then
         local t = (w and cfg.teams[w]) or cfg.teams.default
         if t and next(t) then return t, "saved team" end
     end
-    local ok, t, text = pcall(Summer.plan, w)
+    local ok, t, text = pcall(Summer.plan, w, nil, Summer.partyActive())
     if ok then return t, text end
     Core.log("ERROR summer plan", t)
 end
@@ -276,12 +307,24 @@ function Summer.apply(t, label)
 end
 
 -- Hunt loop (lobby). One join per 40 s so a slow teleport is not repeated.
-local busyUntil = 0
+local busyUntil, memberKey = 0, nil
 local function hunt()
     if os.clock() < busyUntil then return end
     local w = Summer.weather()
     if not w then return end
+    if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
+        if not Summer.partyActive() then memberKey = nil return end
+        local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
+        if key == memberKey then return end
+        busyUntil = os.clock() + 20
+        pcall(Hub.Skins.run)
+        local t, text = teamFor(w)
+        Core.log("summer: party member, team for", text or "-")
+        if t and Summer.apply(t, weatherName(w)) then memberKey = key end
+        return
+    end
     busyUntil = os.clock() + 40
+    if cfg.role == "Host" and Hub.Party then Hub.Party.fill(45) end -- invite the listed players and wait for them; alone after that = the solo team
     pcall(Hub.Skins.run) -- summer skins on the best evolved copies first: they carry pearl bonus and damage (nothing to do = silent)
     local t, text = teamFor(w)
     Core.log("summer: team for", text or "-")
@@ -300,6 +343,25 @@ if LOBBY then
         while alive() do
             if cfg.enable then local ok, err = pcall(hunt) if not ok then Core.log("ERROR summer hunt", err) end end
             task.wait(5)
+        end
+    end)
+    -- In a party every player has to press Start on the pad (user, 2026-11-03; the first test with only the host's call let the pad's timer run out): the member
+    -- sends its own request_start_game as soon as the host's join pulled it onto the Hunt pad.
+    task.spawn(function()
+        local lastStart = 0
+        while alive() do
+            task.wait(1)
+            if cfg.enable and cfg.role == "Member" and os.clock() - lastStart > 4 then
+                local ok, onPad = pcall(function()
+                    local pad = workspace._EVENT_CHALLENGES.Lobbies[PAD]
+                    if pad.Teleporting.Value then return false end
+                    for _, v in pad.Players:GetChildren() do if v.Value == game:GetService("Players").LocalPlayer then return true end end
+                end)
+                if ok and onPad then
+                    lastStart = os.clock()
+                    Core.log("summer: party member on the Hunt pad, start", tostring(call("request_start_game", PAD)))
+                end
+            end
         end
     end)
 end
@@ -609,6 +671,7 @@ if Tabs then
     if not LOBBY then hunt_box:AddLabel("Works in the lobby only (saved here).", true) end
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather, joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
+    hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
     hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
     hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
     hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })

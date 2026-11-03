@@ -9,7 +9,7 @@ local LP = Players.LocalPlayer
 
 local cfg = Core.config.party or {}
 Core.config.party = cfg
-local defaults = { follow = false, host = false, names = "", wait = 45 }
+local defaults = { follow = false, host = false, names = "", wait = 45, accept = false }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
 local Party = {}
@@ -74,6 +74,61 @@ end
 
 function Party.following() return cfg.follow end
 
+-- The game's own party system (2026-11-03, read from its client code): party_invite(player), party_respond_invite(inviter, accept),
+-- party_leave, party_kick(player); players carry the PartyId attribute. The invite prompt of the game calls GUIService.party_ui:respond_invite(inviter, true, true).
+-- UNVERIFIED live: needs a second account in the same lobby server (the argument formats come from the game's UI code).
+local function partyId(p) return p:GetAttribute("PartyId") end
+function Party.size() -- players in this server in my party, me included
+    local id = partyId(LP)
+    if not id then return 1 end
+    local n = 0
+    for _, p in Players:GetPlayers() do if partyId(p) == id then n += 1 end end
+    return n
+end
+local function missing() -- listed players in this server that are not in my party
+    local out, id = {}, partyId(LP)
+    for _, p in listed() do if not id or partyId(p) ~= id then table.insert(out, p) end end
+    return out
+end
+local invitedAt = {}
+local function invite()
+    for _, p in missing() do
+        if os.clock() - (invitedAt[p] or -99) > 20 then
+            invitedAt[p] = os.clock()
+            Core.log("party: invite", p.Name, tostring(Game.invoke("party_invite", p)))
+        end
+    end
+end
+
+-- Host side: invite the listed players and wait until every one of them in the server is in the party (or the time runs out).
+function Party.fill(limit)
+    local want = listed()
+    if #want == 0 then return false end
+    local t = os.clock()
+    while alive() and os.clock() - t < limit do
+        if #missing() == 0 then Core.log("party: everyone is in the party,", Party.size(), "players") return true end
+        invite()
+        task.wait(1)
+    end
+    Core.log("party: not everyone joined, going with", Party.size())
+    return false
+end
+
+-- Member side: accept an invite that comes from a listed player.
+local function acceptInvites()
+    local ok, ui = pcall(function() return Game.loader().load_client_service(script, "GUIService").party_ui end)
+    if not (ok and ui and ui.incoming_invites) then return end
+    local ok_to = {}
+    for _, p in listed() do ok_to[p] = true end
+    for p in ui.incoming_invites do
+        if ok_to[p] then
+            Core.log("party: accepting the invite of", p.Name)
+            local done = pcall(function() ui:respond_invite(p, true, true) end)
+            if not done then Game.invoke("party_respond_invite", p, true) end
+        end
+    end
+end
+
 -- Called by the joiner after it picked a level and before request_start_game: with Host Mode on, wait until every
 -- listed player in the server is on the pad (or Host Wait runs out, always before the pad's own timer), then go.
 function Party.wait_for_party(pad)
@@ -99,6 +154,10 @@ if Hub.mode == "lobby" then
                 local ok, err = xpcall(follow, debug.traceback)
                 if not ok then Core.log("ERROR party", err) end
             end
+            if cfg.accept and not partyId(LP) then
+                local ok, err = xpcall(acceptInvites, debug.traceback)
+                if not ok then Core.log("ERROR party accept", err) end
+            end
             task.wait(1.5)
         end
     end)
@@ -113,6 +172,7 @@ if Tabs then
         Core.save_config()
     end })
     box:AddToggle("PartyFollow", { Text = "Follow Host", Tooltip = "Joins the pad of a listed player as soon as they have picked a level. Turn the joiners off on this account.", Default = cfg.follow, Callback = set("follow") })
+    box:AddToggle("PartyAccept", { Text = "Auto Accept Party Invite", Tooltip = "Accepts a game party invite from a listed player (lobby). The host account invites with Summer > Multi Farm Role = Host.", Default = cfg.accept, Callback = set("accept") })
     box:AddToggle("PartyHost", { Text = "Host Mode", Tooltip = "The joiners wait for the listed players to be on the pad before starting the teleport.", Default = cfg.host, Callback = set("host") })
     box:AddSlider("PartyWait", { Text = "Host Wait (second)", Tooltip = "Longest the host waits for the party; it starts without them after that.", Default = cfg.wait, Min = 5, Max = 65, Rounding = 0, Callback = set("wait") })
 end

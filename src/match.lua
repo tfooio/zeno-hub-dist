@@ -102,6 +102,8 @@ function Match.finish_chain(victory)
         local ok, want = pcall(Hub.Lobby.want_lobby)
         if ok and want then return { { "teleport_back_to_lobby" } } end
     end
+    -- Summer multi farm, member account: the party owner picks Replay / Lobby (only the owner gets the buttons), the party follows.
+    if Hub.Summer and Hub.Summer.member() then return {} end
     -- Relic Farm: a farm run ends in the lobby, where the inventory is read and the next stage chosen.
     if Hub.Relics and Hub.Relics.want_lobby() then return { { "teleport_back_to_lobby" } } end
     -- Summer Hunt: the hour changed, so the next weather may need another team (src/summer.lua).

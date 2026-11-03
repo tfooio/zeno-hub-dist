@@ -36,8 +36,6 @@ local Tabs = {
     DungeonInfo = Window:AddTab("Dungeon Info", "book-open"),
     Game = Window:AddTab("Game", "swords"),
     AutoPlay = Window:AddTab("Auto Play", "bot"),
-    -- Inf Range stays hidden until a run shows it extends reach (src/infrange.lua skips its UI without this tab).
-    -- InfRange = Window:AddTab("Inf Range", "move"),
     Macro = Window:AddTab("Macro", "play"),
     Webhook = Window:AddTab("Webhook", "webhook"),
     Misc = Window:AddTab("Misc", "ellipsis"),

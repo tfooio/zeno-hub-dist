@@ -369,6 +369,7 @@ end
 -- Auto Modifier: show_roguelike_options carries the options ({[slot] = {title, effects}}); the game's own
 -- Confirm button sends select_roguelike_option(slot). Every offer is logged for checking the format.
 local picked = {} -- card -> picks this run
+local cardTextSeen = {}
 local function cardOf(title) return (tostring(title or ""):gsub("^%+%s*", ""):match("^%s*(.-)%s*$")) end
 table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.server_to_client:WaitForChild("show_roguelike_options").OnClientEvent:Connect(function(...)
     local args, options = table.pack(...), nil
@@ -386,6 +387,22 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
     for slot, v in options or {} do effects[tostring(slot)] = v.effects end -- Summer Medium preset reads the health amount from here (format unverified)
     local line = game:GetService("HttpService"):JSONEncode({ wave = waveVal.Value, n = args.n, titles = titles, effects = effects }) .. "\n"
     pcall(function() if isfile(logPath) then appendfile(logPath, line) else writefile(logPath, line) end end) -- appendfile fails on a missing file
+    -- Card texts (title, description, as the game's own card UI shows them) for ranking the weather cards from data: once per title, Data/roguelike_cards.jsonl.
+    task.spawn(function()
+        task.wait(0.8)
+        local ok, ui = pcall(function() return Game.loader().load_client_service(script, "GUIService").roguelike_select_ui end)
+        if not (ok and ui and type(ui.option_frames) == "table") then return end
+        for slot, f in ui.option_frames do
+            local title = titles[tostring(slot)]
+            if title and not cardTextSeen[title] and typeof(f) == "Instance" then
+                cardTextSeen[title] = true
+                local texts = {}
+                for _, d in f:GetDescendants() do if d:IsA("TextLabel") and d.Text ~= "" then texts[#texts + 1] = d.Text end end
+                local path, row = Core.paths.data .. "/roguelike_cards.jsonl", game:GetService("HttpService"):JSONEncode({ title = title, texts = texts }) .. "\n"
+                pcall(function() if isfile(path) then appendfile(path, row) else writefile(path, row) end end)
+            end
+        end
+    end)
     if not (cfg.modifier.enable and options) then return end
     local best, bestRank
     for slot, v in options do
