@@ -1,2 +1,2 @@
-fb0ebf6 2026-11-03
-Summer: Follow Teammates placement, Walk To Units, card fallback order, evolved-only Zombie and bonus unit, speed cap fix
+b04472c 2026-11-03
+Summer Hunt: wait for the lobby profile before the first pass after a teleport

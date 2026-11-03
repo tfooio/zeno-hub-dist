@@ -317,6 +317,9 @@ end
 local busyUntil, memberKey = 0, nil
 local function hunt()
     if os.clock() < busyUntil then return end
+    -- Right after a teleport the game's lobby services are not built yet (2026-11-03: the first pass 2 s after load failed on profile_data and the popup UI
+    -- and a 120 s wait was already set), so nothing starts until the profile is readable.
+    if not pcall(profile) then return end
     local w = Summer.weather()
     if not w then return end
     if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
