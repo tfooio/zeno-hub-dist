@@ -9,6 +9,9 @@ if cfg.enabled == nil then cfg.enabled = false end
 cfg.url = cfg.url or ""
 if cfg.chest == nil then cfg.chest = true end
 
+if cfg.evolve == nil then cfg.evolve = false end
+cfg.evolve_sent = cfg.evolve_sent or {} -- unit uuids already pinged
+
 local request = request or http_request or (syn and syn.request) or (http and http.request)
 local Webhook = {}
 
@@ -27,6 +30,24 @@ function Webhook.send(payload)
     if not ok then return false, tostring(res) end
     local code = res and res.StatusCode
     return code == 200 or code == 204, code
+end
+
+-- Ping the configured Discord id once per unit (uuid) when its takedowns reach the evolve requirement.
+function Webhook.evolveReady(uuid, name, total, need)
+    if not cfg.evolve or cfg.evolve_sent[uuid] or not (cfg.discord_id or ""):match("^%d+$") then return end
+    cfg.evolve_sent[uuid] = true
+    Core.save_config()
+    task.spawn(function()
+        local ok, code = Webhook.send({
+            username = "Zeno Hub",
+            content = ("<@%s>"):format(cfg.discord_id),
+            allowed_mentions = { users = { cfg.discord_id } },
+            embeds = { { title = name .. " is ready to evolve", description = ("%d / %d takedowns"):format(total, need), color = 0xF1C40F,
+                footer = { text = game:GetService("Players").LocalPlayer.Name } } },
+        })
+        if not ok then cfg.evolve_sent[uuid] = nil end -- try again next refresh
+        Core.log("webhook: evolve ready", name, ok and "sent" or "failed", tostring(code))
+    end)
 end
 
 local function num(v)
@@ -263,7 +284,20 @@ if Tabs then
             notify(ok and "test sent" or ("test failed: " .. tostring(code)))
         end)
     end)
+    box:AddInput("WebhookDiscordId", {
+        Text = "Discord User ID (pings)",
+        Default = cfg.discord_id or "",
+        Placeholder = "numeric id, for evolve pings",
+        Finished = true,
+        Callback = function(v)
+            v = (v or ""):gsub("%s", "")
+            if v ~= "" and not v:match("^%d+$") then return notify("Discord ID must be digits only") end
+            cfg.discord_id = v
+            Core.save_config()
+        end,
+    })
     local note = Tabs.Webhook:AddRightGroupbox("Notification", "bell")
+    note:AddToggle("WebhookEvolve", { Text = "Unit Ready to Evolve", Tooltip = "Pings the Discord User ID once when an equipped unit's lifetime takedowns reach its evolve requirement (checked in the Info tab loop; the game updates the total after a match).", Default = cfg.evolve, Callback = function(v) cfg.evolve = v Core.save_config() end })
     note:AddToggle("WebhookEnabled", { Text = "Game Finished", Default = cfg.enabled, Callback = function(v) cfg.enabled = v Core.save_config() end })
     note:AddToggle("WebhookChest", { Text = "Dungeon Chest Opened", Tooltip = "After the last dungeon room: the chests opened, your luck, and what the inventory gained.", Default = cfg.chest, Callback = function(v) cfg.chest = v Core.save_config() end })
 end

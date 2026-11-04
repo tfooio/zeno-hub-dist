@@ -1,2 +1,2 @@
-febb72f 2026-11-03
-Info tab: equipped units' lifetime takedowns vs evolve requirement
+f404599 2026-11-03
+Webhook: ping a Discord id once when an equipped unit reaches its evolve takedowns

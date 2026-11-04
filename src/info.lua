@@ -44,6 +44,7 @@ local function refresh()
             local need = ev and ev._takedown_requirement
             local live = Hub.mode == "match" and matchTakedowns(u.unit_id) or 0
             local extra = live > 0 and (" | this match +%d"):format(live) or ""
+            if need and total >= need and Hub.Webhook then Hub.Webhook.evolveReady(u.uuid, name, total, need) end
             if need then
                 text = ("%d: %s: %d / %d (%d left)%s"):format(slot, name, total, need, math.max(need - total, 0), extra)
             else
