@@ -1,2 +1,2 @@
-f404599 2026-11-03
-Webhook: ping a Discord id once when an equipped unit reaches its evolve takedowns
+d7787af 2026-11-05
+Loader: drop the second start after a teleport (autoexec + queue_on_teleport) with a 20 s boot stamp

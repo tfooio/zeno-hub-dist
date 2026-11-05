@@ -2,6 +2,11 @@
 -- Dev mode: modules come from workspace "Zeno Hub/Dev/" (mirrored from the repo by tools/sync.ps1,
 -- since the executor cannot read outside workspace).
 local LOBBY_PLACE = 8304191830
+-- Autoexec and the queue_on_teleport copy both start this file after a teleport; the second start is dropped.
+-- shortcut: a manual re-run within 20 s of boot is ignored too; Hub.reload clears the stamp.
+local env = getgenv()
+if env.ZenoHubBoot and os.time() - env.ZenoHubBoot < 20 then return end
+env.ZenoHubBoot = os.time()
 -- Failsafe for Roblox's own loading hanging: no module would ever run, so this one lives here (fixed 60 s,
 -- no config read yet). The in-game Loading screen has its own, configurable one in match.lua.
 task.spawn(function()
@@ -17,7 +22,6 @@ local DEV_DIR = "Zeno Hub/Dev/"
 -- shortcut: no hosted build yet, set this when the repo is served somewhere reachable by HttpGet.
 local BASE_URL = "https://raw.githubusercontent.com/tfooio/zeno-hub-dist/main/"
 
-local env = getgenv()
 if env.ZenoHub and env.ZenoHub.unload then pcall(env.ZenoHub.unload) end
 
 -- getgenv().ZenoForceHosted = true before running makes a machine that has Dev files load the hosted build
@@ -60,6 +64,7 @@ end
 function Hub.reload()
     local src = DEV and readfile(DEV_DIR .. "loader.lua") or game:HttpGet(BASE_URL .. "loader.lua")
     Hub.unload()
+    env.ZenoHubBoot = nil
     task.defer(function() loadstring(src)() end)
 end
 
