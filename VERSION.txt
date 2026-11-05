@@ -1,2 +1,2 @@
-d7787af 2026-11-05
-Loader: drop the second start after a teleport (autoexec + queue_on_teleport) with a 20 s boot stamp
+4fca41e 2026-11-05
+Summer: merchant and bingo auto-claim, pearl-bonus unit picks, portal tiers and high-tier team in the Joiner, Artifact mode, hybrid units on hills

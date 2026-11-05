@@ -49,10 +49,18 @@ function Game.worlds(kind)
     return out
 end
 
+-- Weekly Artifact stage (verified 2026-11-04: raid world with `_artifact_stage`, this week artifact_usopp_ts). Only the live week is in Worlds.
+function Game.artifact_worlds()
+    local out = {}
+    for id, w in Game.data("Worlds") do if w._artifact_stage then table.insert(out, id) end end
+    table.sort(out)
+    return out
+end
+
 -- Stage type (Nousigi's list) and map display name of a match's LevelData.
 -- Verified: Story, Legend, Raid, Challenge, Daily Challenge, Infinity Mansion. From flags only (UNVERIFIED):
 -- Infinite (id suffix), Portal, Assassin Contract, Dungeon Run.
-Game.STAGE_TYPES = { "Story", "Infinite", "Legend", "Raid", "Infinity Mansion", "Challenge", "Daily Challenge", "Portal", "Assassin Contract", "Dungeon Run", "Event" }
+Game.STAGE_TYPES = { "Story", "Infinite", "Legend", "Raid", "Artifact", "Infinity Mansion", "Challenge", "Daily Challenge", "Portal", "Assassin Contract", "Dungeon Run", "Event" }
 function Game.stage(ld)
     if not ld then return end
     local Worlds, Maps = Game.data("Worlds"), Game.data("Maps")
@@ -66,6 +74,7 @@ function Game.stage(ld)
     if ld._dungeon then return "Dungeon Run", mapName end
     if ld._is_map_or_portal_level then return "Portal", mapName end
     if w and w.legend_stage then return "Legend", w.name end
+    if w and w._artifact_stage then return "Artifact", w.name end
     if w and w.raid_world then return "Raid", w.name end
     if w then return id:find("_infinite$") and "Infinite" or "Story", w.name end
     -- No world: the current event (verified: april2_event, _gamemode "raid", Future City).

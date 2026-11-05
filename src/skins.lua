@@ -48,9 +48,9 @@ local evolvesTo = {}
 for _, d in Units do if d.evolved and d.evolved.from then evolvesTo[d.evolved.from] = true end end
 Skins.canEvolve = function(unitId) return evolvesTo[unitId] == true end
 
--- Summer Pearl bonus of a worn summer skin by its rarity (user: Bulby's Epic skin +5%, Homura's Legendary +25%, Mythic skins +50%; Rare and
--- Common are not known and count 0).
-local PEARL = { Epic = 5, Legendary = 25, Mythic = 50 }
+-- Summer Pearl bonus of a worn summer skin by its rarity (user: Bulby's Epic skin +5%, Homura's Legendary +25%, Giselle's Mythic skin +40% (2026-11-04,
+-- was 50); Rare and Common are not known and count 0).
+local PEARL = { Epic = 5, Legendary = 25, Mythic = 40 }
 function Skins.pearlBoost(o)
     local id = o.skin and o.skin._skin_id
     local sk = id and SkinData[id]

@@ -13,6 +13,7 @@ local defaults = {
     world = { enable = false, world = nil, act = "Act 1", hard = false, highest = false },
     legend = { enable = false, world = nil, stage = "Stage 1" },
     raid = { enable = false, world = nil, level = "Level 1" },
+    artifact = { enable = false },
     challenge = { enable = false, rewards = {}, done = nil },
     daily = { enable = false, done = nil },
     mansion = { enable = false, hard = false },
@@ -21,6 +22,13 @@ local defaults = {
     team = {}, -- mode key -> team slot "1".."6" loaded before that joiner starts (Team Equipper)
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
+-- Portal tiers (user, 2026-11-04): tiered portals (Sky Portal: portal_depth 3 to 8) are opened lowest or highest tier first, within Lowest / Highest Tier;
+-- lanes: Summer portals place where the lanes have met (src/summer.lua). Portals without a tier ignore the tier options.
+cfg.portal.order = cfg.portal.order or "Lowest Tier First"
+cfg.portal.min = cfg.portal.min or 1
+cfg.portal.max = cfg.portal.max or 5
+cfg.portal.highFrom = cfg.portal.highFrom or 6 -- tiers from here load the team of Portal Team (High Tier), when one is set
+if cfg.portal.lanes == nil then cfg.portal.lanes = true end
 
 local Joiner = {}
 local function alive() return env.ZenoHub == Hub end
@@ -134,6 +142,14 @@ function modes.raid()
     if not lv or not unlocked(lv) then return nil, "locked" end
     return { folder = workspace._RAID.Raid, level = lv, diff = "Hard", mm = Levels[lv]._MATCHMAKING and lv or nil }
 end
+-- Weekly Artifact stage: it is a level of a raid world, so it uses the raid pads (verified: raid_world, Hard, matchmaking Hard max 6).
+function modes.artifact()
+    local wid = Game.artifact_worlds()[1]
+    local lv = wid and levelOf(wid, "1")
+    if not lv then return nil, "no artifact stage this week" end
+    if not unlocked(lv) then return nil, "locked" end
+    return { folder = workspace._RAID.Raid, level = lv, diff = "Hard", mm = Levels[lv]._MATCHMAKING and lv or nil }
+end
 function modes.legend()
     local wid = kinds.legend[cfg.legend.world or ""]
     if not wid then return nil, "no world" end
@@ -197,13 +213,20 @@ local function pickPortal(inMatch)
     local s = inMatch and matchSession()
     local pd, Items = s and s.profile_data or Game.profile(), Game.data("Items")
     local LSC = inMatch and Game.loader().load_core_service(script, "LevelServiceCore")
+    local best
     for _, it in (pd and pd.inventory.unique_items) or {} do
         local d, u = Items[it.item_id], it._unique_item_data
         if d and want[d.name] and (not u or (u._portal_tries or 0) < (u._portal_max_tries or 1))
             and (not inMatch or LSC.is_valid_replay_portal_item(s, it.uuid)) then
-            return { portal = it.uuid, name = d.name }
+            local depth = u and u._unique_portal_data and u._unique_portal_data.portal_depth or 0
+            if depth == 0 or (depth >= cfg.portal.min and depth <= cfg.portal.max) then
+                -- no tier (secret portals, the plain ones) first, then the tiers in the chosen order; ties keep the inventory order
+                local rank = depth == 0 and -1 or (cfg.portal.order == "Highest Tier First" and 100 - depth or depth)
+                if not best or rank < best.rank then best = { portal = it.uuid, name = d.name, depth = depth, rank = rank } end
+            end
         end
     end
+    if best then return best end
     return nil, "no portal in inventory"
 end
 function modes.portal() return pickPortal(false) end
@@ -232,8 +255,8 @@ function modes.relics()
 end
 
 -- UI name -> mode key; cfg.order is the user's priority (first = tried first).
-local MODES = { World = "world", Legend = "legend", Raid = "raid", ["Infinity Mansion"] = "mansion", Challenge = "challenge", ["Daily Challenge"] = "daily", Portal = "portal", ["Dungeon Run"] = "dungeon", ["Relic Farm"] = "relics" }
-local MODE_NAMES = { "World", "Legend", "Raid", "Infinity Mansion", "Challenge", "Daily Challenge", "Portal", "Dungeon Run", "Relic Farm" }
+local MODES = { World = "world", Legend = "legend", Raid = "raid", ["Infinity Mansion"] = "mansion", Artifact = "artifact", Challenge = "challenge", ["Daily Challenge"] = "daily", Portal = "portal", ["Dungeon Run"] = "dungeon", ["Relic Farm"] = "relics" }
+local MODE_NAMES = { "World", "Legend", "Raid", "Artifact", "Infinity Mansion", "Challenge", "Daily Challenge", "Portal", "Dungeon Run", "Relic Farm" }
 -- A mode missing from the saved order (new mode, or a cleared slot) goes to the end, so it still runs.
 for _, n in MODE_NAMES do
     if not table.find(cfg.order, n) then
@@ -268,8 +291,8 @@ local function teamMatches(slot)
     if nWant == 0 then return nil end
     return nWant == nHave
 end
-local function equipTeam(mode)
-    local slot = cfg.team[mode]
+local function equipTeam(mode, override)
+    local slot = override or cfg.team[mode]
     if not slot then return end
     local m = teamMatches(slot)
     if m == nil then return Core.log("joiner: team slot", slot, "is empty, keeping the hotbar", mode) end
@@ -323,8 +346,9 @@ local function try(mode)
         local pad = ownPortalPad()
         if not pad then
             if not freePad(workspace._PORTALS.Lobbies) then return false, "no free pad" end
-            equipTeam(mode)
-            Core.log("joiner", mode, plan.name)
+            -- user, 2026-11-04: the Summer team does not clear tier 8, so a tiered portal from cfg.portal.highFrom up loads its own team (Portal Team (High Tier)).
+            equipTeam(mode, (plan.depth or 0) >= cfg.portal.highFrom and cfg.team.portal_high or nil)
+            Core.log("joiner", mode, plan.name, plan.depth and plan.depth > 0 and ("tier " .. plan.depth) or "")
             Game.invoke("use_portal", plan.portal, { friends_only = true })
             for _ = 1, 20 do pad = ownPortalPad() if pad then break end task.wait(0.25) end
         end
@@ -397,7 +421,7 @@ if Tabs then
     local setting = T:AddLeftGroupbox("Auto Join Setting", "settings-2")
     setting:AddSlider("JoinCooldown", { Text = "Joiner Cooldown (second)", Tooltip = "Wait in the lobby before joining.", Default = cfg.cooldown, Min = 0, Max = 60, Rounding = 0, Callback = set(cfg, "cooldown") })
     setting:AddLabel("Priority: when several joiners are on, the first available one in this order is joined. Use the arrows to move a mode.", true)
-    local MODE_ICONS = { World = "globe", Legend = "crown", Raid = "swords", ["Infinity Mansion"] = "castle", Challenge = "trophy", ["Daily Challenge"] = "calendar-check",
+    local MODE_ICONS = { World = "globe", Legend = "crown", Raid = "swords", ["Infinity Mansion"] = "castle", Artifact = "gem", Challenge = "trophy", ["Daily Challenge"] = "calendar-check",
         Portal = "orbit", ["Dungeon Run"] = "skull", ["Relic Farm"] = "gem" }
     local items = {}
     for _, n in MODE_NAMES do items[#items + 1] = { key = n, text = n, icon = MODE_ICONS[n] } end
@@ -424,6 +448,11 @@ if Tabs then
             Core.save_config()
         end })
     end
+    local highCur = cfg.team.portal_high
+    team:AddDropdown("JoinTeamPortalHigh", { Text = "Portal Team (High Tier)", Tooltip = "Tiered portals from High Tier Team From up load this team instead of the Portal Team. None = the Portal Team for every tier.", Values = teamValues, Default = highCur and teamValues[tonumber(highCur) + 1] or "None", Callback = function(v)
+        cfg.team.portal_high = v and v ~= "None" and v:match("%d+") or nil
+        Core.save_config()
+    end })
 
     local MM_TIP = "Queues in Global Matchmaking instead of a solo pad; the hub types the game's captcha for you. Levels without matchmaking still use the pad."
     local world = T:AddLeftGroupbox("World Joiner", "globe")
@@ -446,6 +475,10 @@ if Tabs then
     raid:AddDropdown("JoinRaidLevel", { Text = "Select Level", Values = { "Level 1", "Level 2", "Level 3", "Level 4", "Level 5" }, Default = cfg.raid.level, Callback = set(cfg.raid, "level") })
     raid:AddToggle("JoinRaidMM", { Text = "Use Matchmaking", Tooltip = MM_TIP, Default = cfg.raid.mm, Callback = set(cfg.raid, "mm") })
 
+    local art = T:AddRightGroupbox("Artifact Joiner", "gem")
+    art:AddToggle("JoinArtifact", { Text = "Auto Join Artifact Stage", Tooltip = "Joins this week's Artifact stage (Hard) on a raid pad. The stage changes weekly; the hub follows it.", Default = cfg.artifact.enable, Callback = set(cfg.artifact, "enable") })
+    art:AddToggle("JoinArtifactMM", { Text = "Use Matchmaking", Tooltip = MM_TIP, Default = cfg.artifact.mm, Callback = set(cfg.artifact, "mm") })
+
     local REWARDS = { "StarFruit", "StarFruitGreen", "StarFruitRed", "StarFruitPink", "StarFruitBlue", "StarFruitEpic", "star_remnant" }
     local chal = T:AddRightGroupbox("Challenge Joiner", "trophy")
     chal:AddToggle("JoinChallenge", { Text = "Auto Join Challenge", Default = cfg.challenge.enable, Callback = set(cfg.challenge, "enable") })
@@ -467,6 +500,11 @@ if Tabs then
     local portal = T:AddRightGroupbox("Portal Joiner", "orbit")
     portal:AddToggle("JoinPortal", { Text = "Auto Join Portal", Tooltip = "Opens a portal from your inventory (one try each) and starts it solo.", Default = cfg.portal.enable, Callback = set(cfg.portal, "enable") })
     portal:AddDropdown("JoinPortalSelect", { Text = "Select Portal", Tooltip = "Only these portals are opened. Empty = none.", Values = PORTALS, Multi = true, Default = Core.keys(cfg.portal.portals), Callback = multi(cfg.portal, "portals") })
+    portal:AddDropdown("JoinPortalOrder", { Text = "Portal Tier Order", Tooltip = "Tiered portals (Sky Portal) are opened lowest or highest tier first. Portals without a tier, like the secret Explosion Mage's Portal, always come first.", Values = { "Lowest Tier First", "Highest Tier First" }, Default = cfg.portal.order, Callback = set(cfg.portal, "order") })
+    portal:AddSlider("JoinPortalMin", { Text = "Lowest Tier", Tooltip = "Tiered portals below this tier are skipped.", Default = cfg.portal.min, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "min") })
+    portal:AddSlider("JoinPortalMax", { Text = "Highest Tier", Tooltip = "Tiered portals above this tier are skipped. Tier 3 / 4 / 5 / 6 / 8 Sky Portals have a difficulty scale of about 6 / 12 / 18 / 48 / 116.", Default = cfg.portal.max, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "max") })
+    portal:AddSlider("JoinPortalHighFrom", { Text = "High Tier Team From", Tooltip = "Tiered portals at or above this tier load Portal Team (High Tier) from the Team Equipper box (the Vegito team, say). Below it the normal Portal Team, or your hotbar, is used.", Default = cfg.portal.highFrom, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "highFrom") })
+    portal:AddToggle("JoinPortalLanes", { Text = "Summer Portals: Place Where Lanes Meet", Tooltip = "In a Sky Portal or Explosion Mage's Portal with more than one enemy lane, Auto Play's Distance Percentage is taken from the map (where every lane is within 18 studs of the others) instead of your saved one. Everything else stays on your Auto Play settings, so Enable Auto Play has to be on.", Default = cfg.portal.lanes, Callback = set(cfg.portal, "lanes") })
 
     local daily = T:AddRightGroupbox("Daily Challenge Joiner", "calendar")
     daily:AddToggle("JoinDaily", { Text = "Auto Join Daily Challenge", Tooltip = "Solo, from the daily pad.", Default = cfg.daily.enable, Callback = set(cfg.daily, "enable") })

@@ -22,6 +22,9 @@ cfg.follow.units = cfg.follow.units or 3 -- teammates' damage units to wait for
 cfg.follow.wave = cfg.follow.wave or 7 -- or this wave, whichever comes first
 cfg.shop = cfg.shop or { enable = false, keep = 0 } -- Auto Summon Summer Banner: on / Summer Pearls to leave untouched
 cfg.sellSkins = cfg.sellSkins or { enable = false, rarity = { Rare = true } } -- Auto Sell Skins: on / skin rarities to sell
+cfg.merchant = cfg.merchant or { enable = false, items = {}, known = {}, gemKeep = 5000 } -- Auto Buy Summer Merchant: on / item ids to buy / ids seen so far / gems never spent
+cfg.bingo = cfg.bingo or { enable = false } -- Auto Claim Summer Bingo
+cfg.portals = nil -- the Summer portal options moved into the Portal Joiner (Joiner tab): Joiner config portal = { order, min, max, lanes }
 
 local Summer = {}
 local Units, Weather = Game.data("Units"), Game.data("Weather")
@@ -154,8 +157,10 @@ function Summer.plan(w, owned, party)
     end
     local function take(c) if c then used[c.id] = true end return c end
     local function dps(c) return not (c.r.farm or c.r.buffer or c.d._show_as_buff_unit) and (c.d.damage or 0) > 0 end
-    -- Summer Pearl bonus (user, 2026-11-02): evolved Mythic units +50%, a worn Mythic skin +50%, Legendary +25%, Epic +5%, skins only on evolved units.
-    local function boost(c) return (c.d.rarity == "Mythic" and c.d.evolved and 50 or 0) + Hub.Skins.pearlBoost(c.o) end
+    -- Summer Pearl bonus (user, 2026-11-04): only Summer event units give any. Giselle's skin +40%, Water Goddess and Fishi +40% each ("I believe", UNVERIFIED
+    -- against the game), Bulby's Epic skin +5%, Legendary skins +25%; skins only on evolved units. Other evolved Mythics (Elyssia, Elfy ...) give nothing.
+    local UNIT_BOOST = { aqua_evolved = 40, ishmael_evolved = 40 }
+    local function boost(c) return (UNIT_BOOST[c.id] or 0) + Hub.Skins.pearlBoost(c.o) end
     -- Carry pick: the most pearl bonus among the units that are at least a quarter as strong as the strongest candidate, then the strongest.
     local function carry(filter)
         local top = 0
@@ -192,7 +197,13 @@ function Summer.plan(w, owned, party)
         d2 = pick({ "giselle_evolved" }) or any() -- user, 2026-11-03: Zombie only evolved, never the unevolved copy
         local aqua = pick({ "aqua_evolved", "aqua" }) or any()
         -- the pearl-bonus unit must be evolved too (user): an unevolved unit that can still evolve never gets the slot
-        local booster = take(carry(function(c) return dps(c) and usable(c) and not evolvesTo[c.id] end))
+        -- A unit with pearl bonus wins over a stronger one without (Fishi's damage is far under a quarter of the top unit's, so carry() skipped it).
+        local booster
+        for _, c in cands do
+            if not used[c.id] and dps(c) and usable(c) and not evolvesTo[c.id] and boost(c) > 0
+                and (not booster or boost(c) > boost(booster) or (boost(c) == boost(booster) and score(c) > score(booster))) then booster = c end
+        end
+        booster = take(booster or carry(function(c) return dps(c) and usable(c) and not evolvesTo[c.id] end))
         if aqua then team[2] = aqua.id end
         if booster then team[3] = booster.id table.insert(notes, ("pearl bonus unit +%d%%"):format(boost(booster))) end
         if d1 then team[4] = d1.id end
@@ -440,6 +451,92 @@ if LOBBY then
                 if not ok then Core.log("ERROR summer banner", err) end
             end
             task.wait(20)
+        end
+    end)
+end
+
+-- Auto Buy Summer Merchant (user, 2026-11-04: Bulby on the ship, "all the possible items in the shop"). The shop is BSDShop: request_current_bsd_shop returns
+-- { [id] = { stock, resource_cost = { id = "SummerPearls", amount } | gem_cost } } for the current interval (read 2026-11-04: star_remnant_limited 5000 x15,
+-- StarFruitCapsule 2250 x9, dungeon_key 10000 x1, summer_pearls_exchange 250 gems x10), bought with buy_bsd_shop_item(id, "1"), the same shape as the other category
+-- shops (the UI sends "1" / "10" / "100"). The call was only tested without enough pearls (returns nil, nothing spent); a real purchase is UNVERIFIED.
+-- Gems go to pearls first (the 5,000-pearl items need them), then the pearl items by the shop's own order. The banner summon spends everything above Keep Summer Pearls,
+-- so what the merchant gets is what the summon leaves: raise Keep Summer Pearls to save for the 5,000-pearl items.
+local EXCHANGE = "summer_pearls_exchange"
+local function gems()
+    local st = game:GetService("Players").LocalPlayer:FindFirstChild("_stats")
+    local v = st and st:FindFirstChild("gem_amount")
+    return v and v.Value or 0
+end
+local function merchant()
+    local ok, shop = pcall(Game.invoke, "request_current_bsd_shop")
+    if not (ok and type(shop) == "table") then return end
+    -- The stock the shop reports never drops (read 2026-11-04: 10 exchanges bought, stock still 10, and the 30 s loop kept trying); what is left is stock minus
+    -- profile_data.bsd_shop_data.bought_items[id], the way the gold shop does it. Right after a purchase the profile may lag, so a refused buy still stops an item.
+    local bought = (profile().bsd_shop_data or {}).bought_items or {}
+    local list = {}
+    for id, it in shop do
+        if cfg.merchant.known[id] == nil then cfg.merchant.known[id] = true cfg.merchant.items[id] = true end -- a new item is on until it is unticked
+        it.left = (tonumber(it.stock) or 0) - (bought[id] or 0)
+        if cfg.merchant.items[id] and it.left > 0 then table.insert(list, it) end
+    end
+    table.sort(list, function(a, b)
+        if (a.id == EXCHANGE) ~= (b.id == EXCHANGE) then return a.id == EXCHANGE end
+        return (a.LayoutOrder or 0) < (b.LayoutOrder or 0)
+    end)
+    for _, it in list do
+        local gemCost, rc = tonumber(it.gem_cost), it.resource_cost
+        local have, cost, spend
+        if gemCost then
+            have, cost, spend = function() return gems() - cfg.merchant.gemKeep end, gemCost, gems
+        elseif rc and rc.id == "SummerPearls" then
+            have, cost, spend = pearls, tonumber(rc.amount), pearls
+        end
+        if cost and cost > 0 then
+            local n = math.min(it.left, math.floor(math.max(have(), 0) / cost))
+            for _ = 1, n do
+                if not (alive() and cfg.merchant.enable) then return end
+                local before = spend()
+                call("buy_bsd_shop_item", it.id, "1")
+                if not wait(function() return spend() < before end, 4) then
+                    Core.log("ERROR summer merchant: buying", it.id, "was not taken (currency stayed at", before .. ")")
+                    break
+                end
+                Core.log("summer merchant: bought", it.id, "for", cost)
+                task.wait(0.4)
+            end
+        end
+    end
+end
+-- Summer Bingo (user, 2026-11-04: "just claim when it's ready"). Ready = the board has a claimable line, the check the game's own NPC marker uses; the claim is
+-- the Bingo window's Claim button, claim_summer2_map_board_lines with no arguments (never run for real: the board had nothing claimable when this was written).
+local function bingoReady()
+    local core = Game.loader().load_core_service(script, "Summer2MapBoardCore")
+    local pd = profile()
+    local board = core.get_board(game:GetService("Players").LocalPlayer.UserId)
+    if not board then return false end
+    local wins = pd._summer2_hunt_wins and pd._summer2_hunt_wins.maps or {}
+    return #core.get_claimable_lines(board, wins, pd._summer2_map_board_claimed_lines or {}) > 0
+end
+local function bingo()
+    if not bingoReady() then return end
+    Core.log("summer bingo: claiming")
+    call("claim_summer2_map_board_lines")
+    task.wait(5)
+    if bingoReady() then Core.log("summer bingo: still claimable after the claim") task.wait(55) end
+end
+if LOBBY then
+    task.spawn(function()
+        task.wait(10)
+        while alive() do
+            for key, fn in { merchant = merchant, bingo = bingo } do
+                if cfg[key].enable then
+                    local ok, err = pcall(function()
+                        if Hub.Lobby and Hub.Lobby.quietly then Hub.Lobby.quietly(fn) else fn() end
+                    end)
+                    if not ok then Core.log("ERROR summer", key, err) end
+                end
+            end
+            task.wait(30)
         end
     end)
 end
@@ -826,6 +923,90 @@ function Summer.pilotAbility(smartOrder)
     return o
 end
 
+-- Summer portals (user, 2026-11-04: use the Auto Play settings, and merge this into the Portal Joiner, which opens the portals, with tiers). The Summer 2026
+-- portals are the Sky Portal (portal_item__skypiea, tiered by portal_depth, 20 waves) and the secret Explosion Mage's Portal (portal_summer2_secret, 30 waves);
+-- both levels have portal_group "summer2". In such a match, with Joiner > Portal Joiner > Place Where Lanes Meet on, Auto Play runs on the user's saved
+-- settings with one change: Distance Percentage comes from the lanes. With more than one lane the units stand where the lanes have met (read 2026-11-04, a tier 3
+-- Sky Portal: 3 lanes of 492 / 644 / 622 studs that all end at the base and are within 20 studs of each other from 93% of the longest lane; at 85% a unit on
+-- lane 2 was 30 studs from lane 1, out of its 21 range; the user called 93% "the perfect spot").
+local PORTAL_REACH = 18 -- studs: every other lane has to be this close to the spot (a unit's range is about 21 before upgrades)
+local function portalLevel()
+    local ok, ld = pcall(function() return Game.loader().LevelData end)
+    return ok and ld and ld._is_map_or_portal_level and ld.portal_group == "summer2" and ld or nil
+end
+local function portalOn()
+    local j = Core.config.joiner and Core.config.joiner.portal
+    return j ~= nil and j.lanes ~= false and not LOBBY and portalLevel() ~= nil
+end
+
+local laneCache -- nil: not read yet, false: one lane (nothing to change), number: percent along the longest lane
+local function laneDistance()
+    if laneCache ~= nil then return laneCache or nil end
+    local root = workspace:FindFirstChild("_BASES") and workspace._BASES:FindFirstChild("pve")
+    root = root and root:FindFirstChild("LANES")
+    if not root or #root:GetChildren() == 0 then return nil end -- the map is still loading: ask again next time
+    local lanes = {}
+    for _, lane in root:GetChildren() do
+        local num, spawn, final = {}, nil, nil
+        for _, p in lane:GetChildren() do
+            if p:IsA("BasePart") then
+                if p.Name == "spawn" then spawn = p elseif p.Name == "final" then final = p elseif tonumber(p.Name) then table.insert(num, p) end
+            end
+        end
+        table.sort(num, function(a, b) return tonumber(a.Name) < tonumber(b.Name) end)
+        local pts = {}
+        if spawn then table.insert(pts, spawn.Position) end
+        for _, p in num do table.insert(pts, p.Position) end
+        if final then table.insert(pts, final.Position) end
+        local total = 0
+        for i = 1, #pts - 1 do total += (pts[i + 1] - pts[i]).Magnitude end
+        if #pts >= 2 and total > 0 then table.insert(lanes, { pts = pts, total = total }) end
+    end
+    if #lanes == 0 then return nil end
+    local function at(l, frac)
+        local want, run = frac * l.total, 0
+        for i = 1, #l.pts - 1 do
+            local len = (l.pts[i + 1] - l.pts[i]).Magnitude
+            if run + len >= want then return l.pts[i]:Lerp(l.pts[i + 1], (want - run) / math.max(len, 1e-6)) end
+            run += len
+        end
+        return l.pts[#l.pts]
+    end
+    local ref = lanes[1]
+    for _, l in lanes do if l.total > ref.total then ref = l end end
+    local function gap(l, a)
+        local best = math.huge
+        for g = 0, 100 do best = math.min(best, (at(l, g / 100) - a).Magnitude) end
+        return best
+    end
+    local from = 1
+    if #lanes > 1 then
+        for f = 100, 0, -1 do
+            local a, ok = at(ref, f / 100), true
+            for _, l in lanes do if l ~= ref and gap(l, a) > PORTAL_REACH then ok = false break end end
+            if not ok then break end
+            from = f / 100
+        end
+        from = math.clamp(from, 0.5, 0.95)
+    end
+    laneCache = #lanes > 1 and from * 100 or false
+    Core.log(("summer portals: %d lane(s)%s"):format(#lanes, #lanes > 1 and (", units stand at %.0f%% of the longest lane"):format(from * 100) or ", Distance Percentage unchanged"))
+    return laneCache or nil
+end
+
+-- A copy of the saved Auto Play settings with the lane based distance (the same trick as the Hunt's pilot: distance is read through __index).
+function Summer.portalPilot(saved)
+    if not portalOn() then return nil end
+    local o = copy(saved)
+    local base = o.distance
+    o.distance = nil
+    setmetatable(o, { __index = function(_, k)
+        if k ~= "distance" then return nil end
+        return laneDistance() or base
+    end })
+    return o
+end
+
 -- UI --------------------------------------------------------------------------------------------------------
 local Tabs = Hub.UI and Hub.UI.Tabs
 if Tabs then
@@ -934,6 +1115,47 @@ if Tabs then
         Core.save_config()
     end })
 
+    -- Summer Merchant and Bingo (see merchant() / bingo() above).
+    local mbox = Tabs.Summer:AddRightGroupbox("Summer Merchant", "ship-wheel")
+    local labelItem = {}
+    local function merchantLabels()
+        local names, chosen = {}, {}
+        for id in cfg.merchant.known do
+            local n = (ITEMS[id] and ITEMS[id].name) or (id == EXCHANGE and "Gems to Summer Pearls") or id
+            labelItem[n] = id
+            table.insert(names, n)
+            if cfg.merchant.items[id] then chosen[n] = true end
+        end
+        table.sort(names)
+        return names, chosen
+    end
+    mbox:AddToggle("SummerMerchantBuy", { Text = "Auto Buy Summer Merchant", Tooltip = "Buys the ticked items from Bulby's shop (gems to Summer Pearls first, then the pearl items) while you are in the lobby. The banner summon spends every pearl above Keep Summer Pearls, so raise that to save for the 5,000-pearl items.", Default = cfg.merchant.enable, Callback = function(v) cfg.merchant.enable = v Core.save_config() end })
+    local mitems = mbox:AddDropdown("SummerMerchantItems", { Text = "Select Merchant Items", Tooltip = "Every item the shop has shown (filled in when you are in the lobby); a new item starts ticked.", Values = (merchantLabels()), Multi = true, Default = {}, Callback = function(v)
+        cfg.merchant.items = {}
+        for name, on in v do if on and labelItem[name] then cfg.merchant.items[labelItem[name]] = true end end
+        Core.save_config()
+    end })
+    mbox:AddSlider("SummerMerchantGems", { Text = "Keep Gems", Tooltip = "Gems the gem exchange never spends.", Default = cfg.merchant.gemKeep, Min = 0, Max = 100000, Rounding = 0, Callback = function(v) cfg.merchant.gemKeep = v Core.save_config() end })
+    local function refreshMerchant()
+        local names, chosen = merchantLabels()
+        mitems:SetValues(names)
+        mitems:SetValue(chosen)
+    end
+    refreshMerchant()
+    if LOBBY then
+        task.spawn(function() -- a first run has no known items yet: read the shop once so the list is not empty
+            task.wait(8)
+            local ok, shop = pcall(Game.invoke, "request_current_bsd_shop")
+            if not (ok and type(shop) == "table") then return end
+            for id in shop do
+                if cfg.merchant.known[id] == nil then cfg.merchant.known[id] = true cfg.merchant.items[id] = true end
+            end
+            Core.save_config()
+            refreshMerchant()
+        end)
+    end
+    mbox:AddToggle("SummerBingo", { Text = "Auto Claim Summer Bingo", Tooltip = "Claims the Summer Bingo board whenever a row, column or diagonal is ready (checked every 30 s in the lobby).", Default = cfg.bingo.enable, Callback = function(v) cfg.bingo.enable = v Core.save_config() end })
+
     -- Team editor: one weather at a time, six slots (slot order is your hotbar order, so Auto Play's per-slot settings follow it).
     local box = Tabs.Summer:AddLeftGroupbox("Weather Teams", "users")
     local names, byLabel, labelOf = {}, {}, {}
@@ -945,10 +1167,15 @@ if Tabs then
         table.insert(names, n)
     end
     for _, t in cfg.teams do for _, id in t do addUnit(id) end end
-    if LOBBY then
+    -- The profile is not readable for a few seconds after a teleport (2026-11-04: the slot lists held only the 6 saved units), so this is retried until it is.
+    local function addOwned()
         local ok, pd = pcall(profile)
-        if ok then for _, o in pd.collection.owned_units do addUnit(o.unit_id) end end
+        if not ok then return false end
+        for _, o in pd.collection.owned_units do addUnit(o.unit_id) end
+        table.sort(names)
+        return true
     end
+    local filled = LOBBY and addOwned()
     table.sort(names)
     local weatherLabels, weatherOf = {}, {}
     for _, id in { "default", table.unpack(WEATHERS) } do
@@ -977,6 +1204,19 @@ if Tabs then
         end })
     end
     show()
+    if LOBBY and not filled then
+        task.spawn(function()
+            for _ = 1, 40 do
+                task.wait(3)
+                if not alive() then return end
+                if addOwned() then
+                    for i = 1, 6 do slots[i]:SetValues(names) end
+                    show()
+                    return
+                end
+            end
+        end)
+    end
     box:AddButton({ Text = "Fill Saved Teams from Planner", Tooltip = "Writes the planner's team for every weather into the saved teams, so you can adjust single slots.", DoubleClick = true, Func = function()
         local ok, err = pcall(function()
             for _, id in WEATHERS do cfg.teams[id] = (Summer.plan(id)) end

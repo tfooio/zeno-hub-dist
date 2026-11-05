@@ -19,6 +19,7 @@ local defaults = {
     ulimit = six(function() return 0 end), uorder = six(function(i) return i end), uwave = six(function() return 0 end),
     method = METHODS[1], upgrade_one = false, priority = PRIOS[1], boss_priority = PRIOS[1], mode_preset = {},
     distance = 50, ground = 60, hill = 80, margin = 0.3, pack = true,
+    hybrid_hill = true, -- units that can stand on ground or hills (not buffers, not farms) take a hill when one is in reach: only units on a hill hit Soaring enemies
     kind = {}, mid = {}, slotpos = {}, -- per stage key
     learned = {}, use_learned = true, -- per map: learned[map][slot] = { {x, y, z}, ... }
 }
@@ -118,6 +119,7 @@ if Tabs then
     main:AddSlider("AP_Distance", { Text = "Distance Percentage", Tooltip = "Where along the enemy path your units stand: 0% = enemy spawn, 100% = your base.", Default = cfg.distance, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("distance") })
     main:AddSlider("AP_Ground", { Text = "Ground Percentage", Tooltip = "How far from that path point ground units may stand, as a share of each unit's range. 0% = right at the point, 100% = anywhere in range. Units fill outward from the point.", Default = cfg.ground, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("ground") })
     main:AddSlider("AP_Hill", { Text = "Hill Percentage", Tooltip = "The same for hill units (and units that can use either): how far from the path point they may stand on hills, as a share of their range.", Default = cfg.hill, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("hill") })
+    main:AddToggle("AP_HybridHill", { Text = "Hybrid Units on Hills", Tooltip = "Units that can stand on ground or hills (not buffers, not money units) take a hill spot when one is within Hill Percentage of the path point, because Soaring enemies only take damage from units on a hill. With no hill in reach they stand on the ground as before.", Default = cfg.hybrid_hill, Callback = set("hybrid_hill") })
     ui.status = main:AddLabel("Status: -", true)
     ui.slots = main:AddLabel("Slots: -", true)
 
@@ -461,7 +463,7 @@ if Hub.mode ~= "match" then return AutoPlay end
 
 -- Summer Hunt started by Auto Summer Hunt: its own settings on top of nothing (src/summer.lua); the saved config is not read or written.
 do
-    local ok, ov = pcall(function() return Hub.Summer and Hub.Summer.pilot(defaults, METHODS) end)
+    local ok, ov = pcall(function() return Hub.Summer and (Hub.Summer.pilot(defaults, METHODS) or Hub.Summer.portalPilot(cfg)) end)
     if ok and ov then
         cfg = ov
         Core.log("autoplay: Summer autopilot settings")
@@ -863,6 +865,9 @@ local function rank(slot, h, placed, center, around, boost)
             elseif pl.buffer then table.insert(anchors, { pos = pl.pos, reach = pl.range * 0.95 }) end
         end
     end
+    -- Soaring enemies only take damage from units standing on a hill (game text, and `_on_hill` in its targeting code): a hybrid unit that attacks takes a hill
+    -- spot whenever one is a candidate (ground spots stay as the fallback, and the buffer reach filter below does not drop hill spots).
+    local hillFirst = cfg.hybrid_hill and def.hybrid_placement and not def.hill_unit and roleOf(def) ~= "buffer" and roleOf(def) ~= "farm"
     if #anchors > 0 and #out > 0 and not hasCopy then -- later copies follow their first copy (it was placed inside the reach)
         local best = 0
         for _, c in out do
@@ -875,10 +880,11 @@ local function rank(slot, h, placed, center, around, boost)
         end
         if best > 0 then
             local kept = {}
-            for _, c in out do if c.reach == best then table.insert(kept, c) end end
+            for _, c in out do if c.reach == best or (hillFirst and c.cls == "H") then table.insert(kept, c) end end
             out = kept
         end
     end
+    if hillFirst then for _, c in out do if c.cls == "H" then c.score += 1e7 end end end
     table.sort(out, function(a, b) return a.score > b.score end)
     return out
 end

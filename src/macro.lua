@@ -122,7 +122,7 @@ local levelId = level and level.id
 local Worlds, Maps = Game.data("Worlds"), Game.data("Maps")
 local function worldNames(kind)
     local out = {}
-    for _, id in Game.worlds(kind) do if not table.find(out, Worlds[id].name) then table.insert(out, Worlds[id].name) end end
+    for _, id in Game.worlds(kind) do if not Worlds[id]._artifact_stage and not table.find(out, Worlds[id].name) then table.insert(out, Worlds[id].name) end end
     return out
 end
 local function allMaps()
@@ -151,11 +151,17 @@ local function portalKeys()
     table.sort(out)
     return out
 end
+local function artifactNames()
+    local out = {}
+    for _, id in Game.artifact_worlds() do table.insert(out, Worlds[id].name) end
+    return out
+end
 -- shortcut: Infinity Mansion and Daily list every map (no pool data found); narrow if the lists get unwieldy.
 local SECTIONS = {
     { mode = "Story", maps = worldNames("story") },
     { mode = "Legend", maps = worldNames("legend") },
     { mode = "Raid", maps = worldNames("raid") },
+    { mode = "Artifact", maps = artifactNames() }, -- shortcut: only this week's stage is listed; last week's macro stays saved but hidden
     { mode = "Infinity Mansion", maps = allMaps() },
     { mode = "Challenge", maps = worldNames("story") },
     { mode = "Daily Challenge", maps = allMaps() },
