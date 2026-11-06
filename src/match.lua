@@ -121,6 +121,11 @@ function Match.finish_chain(victory)
         return chain
     end
     if cfg.next and check(can_next) then table.insert(chain, { "set_game_finished_vote", "next_story" }) end
+    -- Infinity Mansion: the end screen's "Next Room" button calls this with no arguments (spied live 2026-11-05).
+    -- shortcut: on a loss the button is the retry ("NextRetry"); assumed to be the same call, UNVERIFIED (no loss tested).
+    if Game.loader().LevelData._gamemode == "infinite_tower" and (victory and cfg.next or not victory and cfg.replay) then
+        table.insert(chain, { "request_start_infinite_tower_from_game" })
+    end
     if cfg.replay and check(can_replay) then table.insert(chain, { "set_game_finished_vote", "replay" }) end
     -- Portals: the game's end screen asks you to pick the next portal ("Pick Next Portal"); the Joiner's Select Portal list does that.
     if cfg.replay and Hub.Joiner then

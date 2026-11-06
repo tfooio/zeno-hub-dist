@@ -205,7 +205,10 @@ if Tabs then
     end
 
     local manage = Tabs.Macro:AddLeftGroupbox("Manage", "folder")
-    options.file = manage:AddDropdown("MacroRecordFile", { Text = "Select Macro", Values = Macro.list(), AllowNull = true })
+    -- cfg.file keeps the choice across teleports; it also plays on maps that have no macro assigned below.
+    local saved = cfg.file and isfile(("%s/%s.json"):format(Core.paths.macro, cfg.file)) and cfg.file or nil
+    options.file = manage:AddDropdown("MacroRecordFile", { Text = "Select Macro", Tooltip = "Plays on any map with no macro assigned on the right.", Values = Macro.list(), AllowNull = true, Default = saved,
+        Callback = function(v) cfg.file = v Core.save_config() end })
     manage:AddInput("MacroNewName", { Text = "Create Macro", Default = "", Placeholder = "name, then Enter", Finished = true, Callback = function(v)
         local n = (v or ""):gsub("[\\/:*?\"<>|]", ""):match("^%s*(.-)%s*$")
         if n == "" then return end
@@ -406,7 +409,7 @@ function Macro.stop() runId += 1 status("wait", "stopped") end
 
 function Macro.start()
     local mode, map = stageOf(level)
-    local name = mode and cfg.stage[mode] and cfg.stage[mode][map]
+    local name = mode and cfg.stage[mode] and cfg.stage[mode][map] or cfg.file
     if not name then status("wait", ("no macro for %s, %s"):format(tostring(mode), tostring(map))) return end
     runId += 1
     local myId = runId

@@ -1,2 +1,2 @@
-4fca41e 2026-11-05
-Summer: merchant and bingo auto-claim, pearl-bonus unit picks, portal tiers and high-tier team in the Joiner, Artifact mode, hybrid units on hills
+df24be5 2026-11-06
+Mansion: Auto Next / retry via request_start_infinite_tower_from_game; Macro: Select Macro persists and plays on unassigned maps
