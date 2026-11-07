@@ -55,9 +55,49 @@ local function refresh()
     end
 end
 
+-- Lifetime counters (docs/features/info-tab.md). The game keeps no "currency spent" total: remnants only pay trait rerolls,
+-- so total_trait_rerolls is the remnant spend; pulls = sum of _hatched_unit_stats; per-banner opens come from pity_data / capsule_pity_data.
+local life = UI.Tabs.Info:AddRightGroupbox("Lifetime", "history")
+local lifeLabel = life:AddLabel("Loading...", true)
+
+local function profile()
+    local pd = Game.profile()
+    if pd then return pd end
+    local ok, svc = pcall(Game.loader().load_client_service, script, "UnitServiceClient")
+    return ok and svc and svc.session and svc.session.profile_data or nil
+end
+local function commas(n) return (tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")) end
+local function readable(id)
+    id = tostring(id):gsub("^capsule_", ""):gsub("_", " "):gsub("(%l)(%u)", "%1 %2")
+    return (id:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
+end
+
+local function refreshLife()
+    local pd = profile()
+    if not pd then return end
+    local normal, shiny = 0, 0
+    for _, s in pd._hatched_unit_stats or {} do normal += s.normal or 0 shiny += s.shiny or 0 end
+    local lines = {
+        ("Trait rerolls (remnants): %s"):format(commas(pd.total_trait_rerolls or 0)),
+        ("Units summoned: %s (%s shiny)"):format(commas(normal + shiny), commas(shiny)),
+    }
+    local rows = {}
+    for id, p in pd.pity_data or {} do
+        if (p.opens or 0) > 0 then rows[#rows + 1] = { readable(id), p.opens } end
+    end
+    for id, p in pd.capsule_pity_data or {} do
+        if (p.total_opens or 0) > 0 then rows[#rows + 1] = { readable(id), p.total_opens } end
+    end
+    table.sort(rows, function(a, b) return a[2] > b[2] end)
+    if #rows > 0 then lines[#lines + 1] = "Opens per banner:" end
+    for _, r in rows do lines[#lines + 1] = ("  %s: %s"):format(r[1], commas(r[2])) end
+    lifeLabel:SetText(table.concat(lines, "\n"))
+end
+
 task.spawn(function()
     while env.ZenoHub == Hub do
         pcall(refresh)
+        pcall(refreshLife)
         task.wait(3)
     end
 end)

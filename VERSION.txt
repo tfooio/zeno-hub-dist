@@ -1,2 +1,2 @@
-df24be5 2026-11-06
-Mansion: Auto Next / retry via request_start_infinite_tower_from_game; Macro: Select Macro persists and plays on unassigned maps
+6aa690c 2026-11-07
+Info tab: Lifetime box (trait rerolls, units summoned, opens per banner)
