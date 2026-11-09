@@ -413,7 +413,7 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
         local rank = (cap > 0 and (picked[c] or 0) >= cap) and math.huge or (cfg.modifier.rank[c] or 1000)
         local pilotRank = rank ~= math.huge and Hub.Summer and Hub.Summer.cardRank(c, v) -- Summer autopilot: its own card order
         if pilotRank then rank = pilotRank end
-        if rank ~= math.huge and Hub.Summer and Hub.Summer.avoidCard(c) then rank = 1e9 end -- Summer autopilot: no regen cards without a bleed unit
+        if rank ~= math.huge and rank > -1e8 and Hub.Summer and Hub.Summer.avoidCard(c) then rank = 1e9 end -- Summer autopilot: no regen cards without a bleed unit (not for a Star card)
         if not bestRank or rank < bestRank then best, bestRank = slot, rank end
     end
     if best == nil then return end

@@ -1,2 +1,2 @@
-6aa690c 2026-11-07
-Info tab: Lifetime box (trait rerolls, units summoned, opens per banner)
+464e1bd 2026-11-09
+Summer: Always Take Star Cards toggle (Star Remnant reward cards and Wishing Star first, over presets and caps)

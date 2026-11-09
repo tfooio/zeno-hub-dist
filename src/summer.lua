@@ -750,8 +750,32 @@ local function weatherInfo(opt) -- pearls bonus (fraction), mild
 end
 local function isWeatherCard(card) return (tostring(card):byte(1) or 0) > 127 end
 
+-- Star cards (user, 2026-11-09, after days afk: "a toggle that always selects the card that gives you Star Remnants or Broken Star"). The offers log shows
+-- Star Remnants as a card effect: { type = "add_reward", reward = { item = { { item_id = "star_remnant_limited", amount = 5, chance = 1 } } } }, seen on 37 of ~600
+-- offers of the tier III debuff cards (Enemy Health / Regen / Shield / Speed III, Resistant and Spellproof Enemies III) and Random Curses II, at waves 38, 41 and 47.
+-- Broken Star (Limited) is in no card (0 mentions in the three logs); the game says it is "rarely dropped by Star Golems during Starfall weather", so the Starfall
+-- card 🌠 Wishing Star (+100% Star Golem Chance, effect golem_chance) is the card that raises it. A reward card wins over Wishing Star, both over every other card.
+local STAR_ITEMS = { "star_remnant", "broken_star" } -- item id prefixes (star_remnant_limited, broken_star_limited)
+function Summer.starCard(opt)
+    local golem
+    for _, e in type(opt) == "table" and type(opt.effects) == "table" and opt.effects or {} do
+        if type(e) == "table" then
+            if e.type == "add_reward" and type(e.reward) == "table" then
+                for _, it in type(e.reward.item) == "table" and e.reward.item or {} do
+                    for _, p in STAR_ITEMS do if tostring(it.item_id):sub(1, #p) == p then return "reward" end end
+                end
+            elseif e.type == "golem_chance" and (tonumber(e.amount) or 0) > 0 then golem = true end
+        end
+    end
+    return golem and "golem" or nil
+end
+
 function Summer.cardRank(card, opt)
     if not pilotOn() then return nil end
+    if cfg.starCards then
+        local star = Summer.starCard(opt)
+        if star then return star == "reward" and -2e9 or -1e9 end -- below every other rank, and gameplay.lua skips avoidCard for it
+    end
     -- "Double Attack, Double Cooldown" doubles ability cooldowns too and breaks the Auto Commander / Rukia chains (user): last in every preset, picked
     -- only when it is the whole offer. (The "- Cooldown" cards are the other way round: they cut cooldowns.)
     if tostring(card):find("Double Cooldown", 1, true) then return 2e9 end
@@ -804,6 +828,7 @@ end
 
 function Summer.cardPicked(card, wave, offered, opt)
     if not pilotOn() then return end
+    if cfg.starCards and Summer.starCard(opt) then Core.log("summer: star card taken,", card, Summer.starCard(opt)) end
     table.insert(run.cards, { wave = wave, card = card, offered = offered })
     run.picked[customKey(card)] = (run.picked[customKey(card)] or 0) + 1
     local base = parseCard(card)
@@ -1021,6 +1046,7 @@ if Tabs then
     hunt_box:AddSlider("SummerFollowUnits", { Text = "Wait for Teammate Units", Tooltip = "Damage units of the other players to wait for before placing yours.", Default = cfg.follow.units, Min = 1, Max = 12, Rounding = 0, Callback = function(v) cfg.follow.units = v Core.save_config() end })
     hunt_box:AddSlider("SummerFollowWave", { Text = "Place Anyway at Wave", Tooltip = "Your units are placed at this wave even when the teammates have not placed enough.", Default = cfg.follow.wave, Min = 1, Max = 30, Rounding = 0, Callback = function(v) cfg.follow.wave = v Core.save_config() end })
     hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward. Custom: your own order from Custom Card Priority.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
+    hunt_box:AddToggle("SummerStarCards", { Text = "Always Take Star Cards", Tooltip = "Inside Auto Summer Hunt, always takes the card that gives 5 Star Remnants (the late tier III debuff cards at waves 38, 41 and 47, and Random Curses II), whatever the preset or the health / speed caps say, and the Starfall card Wishing Star (+100% Star Golem Chance, the golems drop Broken Star). Those debuff cards make the stage harder.", Default = cfg.starCards, Callback = function(v) cfg.starCards = v Core.save_config() end })
     hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
     hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })
     local status = hunt_box:AddLabel("Weather: -", true)
