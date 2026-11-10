@@ -1,2 +1,2 @@
-dc96a6b 2026-11-10
-Map Picker: colour legend, scan details, Rescan; snapshot v2
+75ed930 2026-11-10
+Webhook: ping on Sky God / Explosion Mage / Phoenix unit and portal drops

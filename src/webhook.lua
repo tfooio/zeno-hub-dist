@@ -12,6 +12,7 @@ if cfg.chest == nil then cfg.chest = true end
 cfg.emoji = cfg.emoji or {}
 if cfg.evolve == nil then cfg.evolve = false end
 cfg.evolve_sent = cfg.evolve_sent or {} -- unit uuids already pinged
+if cfg.rare == nil then cfg.rare = true end
 
 local request = request or http_request or (syn and syn.request) or (http and http.request)
 local Webhook = {}
@@ -199,6 +200,23 @@ local function drop_lines(list, out, unit_ids)
         end
     end
     for _, name in order do table.insert(out, ("%s **x%s**"):format(name, num(sum[name]))) end
+end
+
+-- Drops that ping (user, 2026-11-10): the secret units and their portals. Ids checked live 2026-11-10 (Items / Units data):
+-- Sky God = enel, Explosion Mage = megumin, Phoenix = marco (the evolved ids are listed too).
+local PING_UNITS = { enel = true, enel_evolved = true, megumin = true, megumin_evolved = true, marco = true, marco_evolved = true }
+local PING_ITEMS = { portal_item__enel = true, portal_summer2_secret = true }
+-- Names of the pinging drops in a run record, "" when none.
+local function pingDrops(rec)
+    local out = {}
+    for i, d in type(rec.new_units) == "table" and rec.new_units or {} do
+        local id = type(d) == "table" and (d.unit_id or d.id) or (rec.new_unit_ids or {})[i]
+        if PING_UNITS[id] then table.insert(out, unitName(id)) end
+    end
+    for _, d in type(rec.new_items) == "table" and rec.new_items or {} do
+        if type(d) == "table" and PING_ITEMS[d.item_id] then table.insert(out, itemName(d.item_id)) end
+    end
+    return table.concat(out, ", ")
 end
 
 -- Embed header: the game's own icon (public thumbnail of its universe) and name. Fetched once; a failed fetch is not cached.
@@ -398,7 +416,7 @@ if Tabs then
         Text = "Discord User ID (pings)",
         Tooltip = "Discord: Settings > Advanced > Developer Mode on, then right-click yourself > Copy User ID.",
         Default = cfg.discord_id or "",
-        Placeholder = "numeric id, for evolve pings",
+        Placeholder = "numeric id, for the ping options",
         Finished = true,
         Callback = function(v)
             v = (v or ""):gsub("%s", "")
@@ -408,6 +426,7 @@ if Tabs then
         end,
     })
     local note = Tabs.Webhook:AddRightGroupbox("Notification", "bell")
+    note:AddToggle("WebhookRare", { Text = "Sky God / Explosion Mage / Phoenix Drop", Tooltip = "Pings the Discord User ID when a match drops Sky God, Explosion Mage or Phoenix, or Sky God's or Explosion Mage's Portal. Sent even if Game Finished is off.", Default = cfg.rare, Callback = function(v) cfg.rare = v Core.save_config() end })
     note:AddToggle("WebhookEvolve", { Text = "Unit Ready to Evolve", Tooltip = "Pings the Discord User ID once when an equipped unit's lifetime takedowns reach its evolve requirement (checked in the Info tab loop; the game updates the total after a match).", Default = cfg.evolve, Callback = function(v) cfg.evolve = v Core.save_config() end })
     note:AddToggle("WebhookEnabled", { Text = "Game Finished", Default = cfg.enabled, Callback = function(v) cfg.enabled = v Core.save_config() end })
     note:AddToggle("WebhookChest", { Text = "Dungeon Chest Opened", Tooltip = "After the last dungeon room: the chests opened, your luck, and what the inventory gained.", Default = cfg.chest, Callback = function(v) cfg.chest = v Core.save_config() end })
@@ -419,9 +438,16 @@ local unsub = Core.on("run_finished", function(rec)
     for _, d in rec.new_items or {} do if type(d) == "table" and d.item_id then addGain(d.item_id, d.amount) end end
     for k, v in rec.resources or {} do addGain(k, v) end
     addGain("gems", rec.gems) addGain("gold", rec.gold) addGain("xp", rec.xp)
-    if not cfg.enabled then return end
+    local hit = cfg.rare and pingDrops(rec) or ""
+    local pinged = hit ~= "" and (cfg.discord_id or ""):match("^%d+$")
+    if not cfg.enabled and not pinged then return end
     task.spawn(function()
-        local ok, code = Webhook.send(Webhook.embed(rec))
+        local payload = Webhook.embed(rec)
+        if pinged then
+            payload.content = ("<@%s> **%s dropped!**"):format(cfg.discord_id, hit)
+            payload.allowed_mentions = { users = { cfg.discord_id } }
+        end
+        local ok, code = Webhook.send(payload)
         Core.log("webhook:", ok and "sent" or "failed", tostring(code))
     end)
 end)
