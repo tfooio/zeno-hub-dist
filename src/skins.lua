@@ -158,7 +158,7 @@ if Hub.UI and Hub.UI.Tabs then
         local ok, plan = pcall(Skins.plan)
         if not ok then return Core.log("ERROR skins plan", plan) end
         for _, s in plan do Core.log("skins plan:", s.skin, "->", s.unitId, s.wearing and ("(replaces " .. s.wearing .. ")") or "") end
-        Hub.UI.Library:Notify(#plan == 0 and "Nothing to equip" or (#plan .. " skins to equip, see the log"), 5)
+        Hub.UI.Library:Notify(#plan == 0 and "Nothing to equip" or (#plan .. " skins to equip, the list is in the log"), 5)
     end })
     box:AddButton({ Text = "Equip Summer Skins", Tooltip = "Puts each owned summer skin on the best copy of its unit (evolved first, then traits, then xp). Hotbar units are taken off and put back in the same slot.", Func = function() task.spawn(Skins.run) end })
 end

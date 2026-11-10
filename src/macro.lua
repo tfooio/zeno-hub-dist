@@ -127,7 +127,7 @@ local function worldNames(kind)
 end
 local function allMaps()
     local out = {}
-    for _, m in Maps do if m.name and not table.find(out, m.name) then table.insert(out, m.name) end end
+    for _, m in Maps do if m.name and m.name ~= "" and not table.find(out, m.name) then table.insert(out, m.name) end end
     table.sort(out)
     return out
 end
@@ -189,7 +189,7 @@ if cfg.maps then
     Core.save_config()
 end
 
-local options = { stage = {} }
+local options = {}
 if Tabs then
     local lib = Hub.UI.Library
     local function set(key) return function(v) cfg[key] = v Core.save_config() end end
@@ -198,10 +198,14 @@ if Tabs then
         table.insert(n, 1, "None")
         return n
     end
+    local syncPick, paintList -- the Stage Macros picker and list, defined below
     local function refresh()
         options.file:SetValues(Macro.list())
-        local n = withNone()
-        for _, d in options.stage do d:SetValues(n) end
+        if options.assign then
+            options.assign:SetValues(withNone())
+            syncPick()
+            paintList()
+        end
     end
 
     local manage = Tabs.Macro:AddLeftGroupbox("Manage", "folder")
@@ -218,7 +222,7 @@ if Tabs then
         refresh()
         options.file:SetValue(n)
     end })
-    manage:AddButton({ Text = "Delete Selected Macro", DoubleClick = true, Func = function()
+    manage:AddButton({ Text = "Delete Selected Macro (double-click)", Risky = true, DoubleClick = true, Func = function()
         local n = options.file.Value
         if not n then lib:Notify("Select a macro first") return end
         delfile(("%s/%s.json"):format(Core.paths.macro, n))
@@ -251,24 +255,114 @@ if Tabs then
 
     local info = Tabs.Macro:AddRightGroupbox("Information", "info")
     local cur = Hub.mode == "match" and { stageOf(level) } or {}
-    info:AddLabel(cur[1] and ("This match: %s, %s"):format(cur[1], tostring(cur[2])) or "Pick a macro per map below; it plays whenever that mode and map loads.", true)
-    local names = withNone()
-    for _, sec in SECTIONS do
-        local box = Tabs.Macro:AddRightGroupbox(("Select %s Macro"):format(sec.mode), "map")
-        local mine, drops = cfg.stage[sec.mode], {}
-        for _, map in sec.maps do
-            local key = ("Stage_%s_%s"):format(sec.mode, map):gsub("%W", "_")
-            local d = box:AddDropdown(key, { Text = map, Values = names, Default = mine[map] or "None", Callback = function(v)
-                mine[map] = v ~= "None" and v or nil
-                Core.save_config()
-            end })
-            table.insert(options.stage, d)
-            table.insert(drops, d)
-        end
-        box:AddButton(("Clear %s Macros"):format(sec.mode), function()
-            for _, d in drops do d:SetValue("None") end
-        end)
+    info:AddLabel(cur[1] and ("This match: %s, %s"):format(cur[1], tostring(cur[2])) or "Pick a macro per map in Stage Macros; it plays whenever that mode and map loads.", true)
+
+    -- Stage Macros: one Mode / Map / Macro picker and the list of what is assigned (it was one dropdown per map, 252 widgets).
+    -- The data is unchanged: cfg.stage[mode][map name] = macro name.
+    local S = lib.Scheme
+    local box = Tabs.Macro:AddRightGroupbox("Stage Macros", "map")
+    local modes, secOf = {}, {}
+    for _, sec in SECTIONS do table.insert(modes, sec.mode) secOf[sec.mode] = sec end
+    local pick = { mode = modes[1], map = secOf[modes[1]].maps[1] }
+    local syncing = false
+    local function ownMacro() -- the macro assigned to the picked mode and map; "None" when there is none or its file is gone
+        local cur = pick.map and cfg.stage[pick.mode][pick.map]
+        return cur and table.find(Macro.list(), cur) and cur or "None"
     end
+    function syncPick() -- the Macro dropdown follows the picked mode and map
+        syncing = true
+        options.assign:SetValue(ownMacro())
+        syncing = false
+    end
+    local function pickStage(mode, map) -- from a list row: point the three dropdowns at it
+        syncing = true
+        pick.mode, pick.map = mode, map
+        options.mode:SetValue(mode)
+        options.map:SetValues(secOf[mode].maps)
+        options.map:SetValue(map)
+        syncing = false
+        syncPick()
+    end
+    options.mode = box:AddDropdown("MacroStageMode", { Text = "Mode", Values = modes, Default = pick.mode, Callback = function(v)
+        if syncing then return end
+        local maps = secOf[v].maps
+        pick.mode, pick.map = v, maps[1]
+        syncing = true
+        options.map:SetValues(maps)
+        options.map:SetValue(maps[1])
+        syncing = false
+        syncPick()
+    end })
+    options.map = box:AddDropdown("MacroStageMap", { Text = "Map", Searchable = true, Values = secOf[pick.mode].maps, Default = pick.map, Callback = function(v)
+        if syncing then return end
+        pick.map = v
+        syncPick()
+    end })
+    options.assign = box:AddDropdown("MacroStageMacro", { Text = "Macro", Tooltip = "Plays whenever this mode and map loads. None = no macro for it (Select Macro plays instead).",
+        Values = withNone(), Default = ownMacro(), Callback = function(v)
+            if syncing or not pick.map then return end
+            cfg.stage[pick.mode][pick.map] = v ~= "None" and v or nil
+            Core.save_config()
+            paintList()
+        end })
+
+    local list = Instance.new("ScrollingFrame")
+    list.BackgroundTransparency, list.BorderSizePixel, list.Size = 1, 0, UDim2.fromScale(1, 1)
+    list.CanvasSize, list.AutomaticCanvasSize, list.ScrollBarThickness = UDim2.new(), Enum.AutomaticSize.Y, 4
+    local lay = Instance.new("UIListLayout")
+    lay.Padding, lay.SortOrder = UDim.new(0, 3), Enum.SortOrder.LayoutOrder
+    lay.Parent = list
+    local count = box:AddLabel("-", true)
+    function paintList()
+        for _, c in list:GetChildren() do if c:IsA("GuiObject") then c:Destroy() end end
+        local have, n = {}, 0
+        for _, name in Macro.list() do have[name] = true end
+        for _, mode in modes do
+            local t, maps = cfg.stage[mode], {}
+            for map in t do table.insert(maps, map) end
+            table.sort(maps)
+            for _, map in maps do
+                n += 1
+                local row = Instance.new("TextButton")
+                row.Size, row.BackgroundColor3, row.BorderSizePixel, row.Text, row.AutoButtonColor, row.LayoutOrder = UDim2.new(1, -6, 0, 26), S.MainColor, 0, "", false, n
+                local rc = Instance.new("UICorner")
+                rc.CornerRadius, rc.Parent = UDim.new(0, 6), row
+                local text = Instance.new("TextLabel")
+                text.BackgroundTransparency, text.Position, text.Size = 1, UDim2.fromOffset(8, 0), UDim2.new(1, -36, 1, 0)
+                text.Text = ("%s: %s  >  %s%s"):format(mode, map, t[map], have[t[map]] and "" or " (file missing)")
+                text.TextColor3, text.TextSize, text.FontFace, text.TextXAlignment, text.TextTruncate = have[t[map]] and S.FontColor or Color3.fromRGB(240, 120, 130), 13, S.Font, Enum.TextXAlignment.Left, Enum.TextTruncate.AtEnd
+                text.Parent = row
+                local x = Instance.new("TextButton")
+                x.AnchorPoint, x.Position, x.Size, x.Text, x.TextSize, x.FontFace = Vector2.new(1, 0.5), UDim2.new(1, -4, 0.5, 0), UDim2.fromOffset(22, 20), "x", 14, S.Font
+                x.BackgroundColor3, x.TextColor3, x.BorderSizePixel, x.AutoButtonColor = S.OutlineColor, S.FontColor, 0, false
+                local xc = Instance.new("UICorner")
+                xc.CornerRadius, xc.Parent = UDim.new(0, 5), x
+                x.Parent = row
+                row.MouseButton1Click:Connect(function() pickStage(mode, map) end)
+                x.MouseButton1Click:Connect(function()
+                    cfg.stage[mode][map] = nil
+                    Core.save_config()
+                    if pick.mode == mode and pick.map == map then syncPick() end
+                    paintList()
+                end)
+                row.Parent = list
+            end
+        end
+        if n == 0 then
+            local none = Instance.new("TextLabel")
+            none.BackgroundTransparency, none.Size, none.Text, none.TextColor3, none.TextSize, none.FontFace = 1, UDim2.new(1, 0, 0, 26), "No stage macro assigned yet.", S.FontColor, 13, S.Font
+            none.TextTransparency, none.Parent = 0.4, list
+        end
+        count:SetText(("%d assigned. Click a row to edit it, x removes it."):format(n))
+    end
+    box:AddUIPassthrough("MacroStageList", { Instance = list, Height = 190 })
+    paintList()
+    box:AddButton({ Text = "Clear Macros Of This Mode (double-click)", Risky = true, DoubleClick = true, Func = function()
+        for map in cfg.stage[pick.mode] do cfg.stage[pick.mode][map] = nil end
+        Core.save_config()
+        syncPick()
+        paintList()
+    end })
 end
 
 if Hub.mode ~= "match" then return Macro end

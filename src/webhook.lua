@@ -348,6 +348,7 @@ if Tabs then
     local box = Tabs.Webhook:AddLeftGroupbox("Setting", "webhook")
     box:AddInput("WebhookUrl", {
         Text = "Webhook URL",
+        Tooltip = "Discord: Server Settings > Integrations > Webhooks > New Webhook > Copy Webhook URL.",
         Default = cfg.url,
         Placeholder = "https://discord.com/api/webhooks/...",
         Finished = true,
@@ -379,6 +380,7 @@ if Tabs then
     for _ in cfg.emoji do emojiCount += 1 end
     box:AddInput("WebhookEmoji", {
         Text = ("Currency emoji (%d set)"):format(emojiCount),
+        Tooltip = "Optional. Press Export currency icons, upload the PNGs to your Discord server as emoji, send them in a message with a backslash (\\:zh_gems:), then paste the <:zh_gems:123> text here.",
         Default = "",
         Placeholder = "paste <:zh_gems:123...> <:zh_gold:456...>",
         Finished = true,
@@ -394,6 +396,7 @@ if Tabs then
     })
     box:AddInput("WebhookDiscordId", {
         Text = "Discord User ID (pings)",
+        Tooltip = "Discord: Settings > Advanced > Developer Mode on, then right-click yourself > Copy User ID.",
         Default = cfg.discord_id or "",
         Placeholder = "numeric id, for evolve pings",
         Finished = true,

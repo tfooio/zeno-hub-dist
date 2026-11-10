@@ -442,7 +442,7 @@ if Tabs then
 
     -- Team Equipper: one team slot per joiner, named as on the in-game Teams screen.
     local team = T:AddLeftGroupbox("Team Equipper", "users")
-    team:AddLabel("Loads the chosen team slot right before that joiner starts. None keeps your hotbar.", true)
+    team:AddLabel("Loads the chosen team slot right before that joiner starts, so it changes your equipped units. None keeps your hotbar.", true)
     local pd = Game.profile()
     local teamValues = { "None" }
     for i = 1, Game.data("GameplaySettings").NUM_TEAM_SLOTS or 6 do

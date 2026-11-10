@@ -1,4 +1,4 @@
--- Game tab: Auto Sell Unit / Auto Sell Farm, Auto Leave, Performance (Delete Map, Boost FPS, Black Screen), Place Anywhere.
+-- Game tab: Auto Sell Unit / Auto Sell Farm, Auto Leave, Performance (Performance Mode, Black Screen), Place Anywhere.
 -- Options live in Core.config.game (hub.json) so they apply after every teleport.
 local Hub = ...
 local Core, Game = Hub.Core, Hub.Game
@@ -14,10 +14,13 @@ local defaults = {
     sell = { enable = false, wave = 0, types = {} },
     sell_farm = { enable = false, wave = 0, types = {} },
     leave = { enable = false, wave = 0 },
-    delete_map = false, boost_fps = false, black_screen = false, performance_mode = false, place_anywhere = true,
+    black_screen = false, performance_mode = false, place_anywhere = true,
     modifier = { enable = false, rank = {}, cap = {} },
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
+-- Delete Map and Boost FPS were removed 2026-11-10 (Performance Mode does both): whoever had one on keeps the effect through Performance Mode.
+if cfg.delete_map or cfg.boost_fps then cfg.performance_mode = true Core.save_config() end
+cfg.delete_map, cfg.boost_fps = nil, nil
 
 local Gameplay = {}
 
@@ -36,10 +39,8 @@ end
 local function alive() return env.ZenoHub == Hub end
 
 -- Performance -------------------------------------------------------------------------------------------
--- Delete Map: decorative children of workspace._map and the _terrain.terrain folder (buildings, props) are
--- unparented and kept for restore. Placement raycasts only count _terrain.ground / .hill, so those, _road,
--- _BASES and _map.obstacles stay.
-local removed = {} -- { instance, original parent }
+-- The decorative parts: children of workspace._map and the _terrain.terrain folder (buildings, props). Placement raycasts only count
+-- _terrain.ground / .hill, so those, _road, _BASES and _map.obstacles are never touched.
 local function mapDecor()
     local list, map, terr = {}, workspace:FindFirstChild("_map"), workspace:FindFirstChild("_terrain")
     for _, c in map and map:GetChildren() or {} do
@@ -50,15 +51,6 @@ local function mapDecor()
     return list
 end
 local MATCH = Hub.mode == "match" -- every Performance option is match-only: the lobby world holds the pads and NPCs
-local function deleteMap(on)
-    if on then
-        if not MATCH then return end
-        for _, c in mapDecor() do table.insert(removed, { c, c.Parent }) c.Parent = nil end
-    else
-        for _, r in removed do pcall(function() r[1].Parent = r[2] end) end
-        removed = {}
-    end
-end
 -- Nothing here may touch the game while it loads (Performance Mode destroying things mid-load is the suspected
 -- cause of a stuck Loading screen, 2026-10-26): wait until PlayerGui.Loading is closed and the character exists
 -- (or 20 s without one), plus a short grace for the game's own post-load setup.
@@ -155,46 +147,6 @@ local function omega(on)
     end)
 end
 
--- Boost FPS: every property we change is remembered and put back when turned off.
-local changed, boostConn = {}, nil
-local function setProp(inst, prop, value)
-    if inst[prop] == value then return end
-    table.insert(changed, { inst, prop, inst[prop] })
-    inst[prop] = value
-end
-local function boostOne(d)
-    if d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") or d:IsA("Smoke") or d:IsA("Fire") or d:IsA("Sparkles") then
-        setProp(d, "Enabled", false)
-    elseif d:IsA("BasePart") then
-        setProp(d, "Material", Enum.Material.SmoothPlastic)
-        setProp(d, "CastShadow", false)
-    elseif d:IsA("Decal") or d:IsA("Texture") then
-        setProp(d, "Transparency", 1)
-    end
-end
-local function boostFps(on)
-    if on then
-        if not MATCH then return end
-        setProp(Lighting, "GlobalShadows", false)
-        for _, e in Lighting:GetChildren() do
-            if e:IsA("PostEffect") then setProp(e, "Enabled", false) end
-        end
-        for i, d in workspace:GetDescendants() do
-            pcall(boostOne, d)
-            if i % 2000 == 0 then task.wait() end -- one pass with no pause froze the game (the lobby alone has 64,000 instances)
-        end
-        boostConn = workspace.DescendantAdded:Connect(function(d) task.defer(pcall, boostOne, d) end)
-        table.insert(Hub.connections, boostConn)
-    else
-        if boostConn then boostConn:Disconnect() boostConn = nil end
-        for i = #changed, 1, -1 do
-            local c = changed[i]
-            pcall(function() c[1][c[2]] = c[3] end)
-        end
-        changed = {}
-    end
-end
-
 -- Black Screen: 3D rendering off; right-click flips it while the option is on.
 local rendering = true -- RunService has no getter for this
 -- With 3D off the screen keeps stale frames on white; a black backdrop under the game's HUD hides them.
@@ -217,8 +169,6 @@ table.insert(Hub.connections, UIS.InputBegan:Connect(function(input, processed)
     end
 end))
 local function restoreAll()
-    deleteMap(false)
-    boostFps(false)
     setRendering(true)
 end
 table.insert(Hub.connections, { Disconnect = restoreAll }) -- unload puts the game back as it was
@@ -230,22 +180,22 @@ if Tabs then
     local T = Tabs.Game
 
     local sell = T:AddLeftGroupbox("Auto Sell", "badge-dollar-sign")
-    sell:AddToggle("SellUnit", { Text = "Auto Sell Unit", Tooltip = "Sell all your units at the wave below. Unsellable units (Bulby) are skipped.", Default = cfg.sell.enable, Callback = set(cfg.sell, "enable") })
+    sell:AddToggle("SellUnit", { Text = "Auto Sell Unit", Tooltip = "Sells every unit you have placed in this match at the wave below (your collection is not touched). Unsellable units (Bulby) are skipped.", Default = cfg.sell.enable, Callback = set(cfg.sell, "enable") })
     sell:AddSlider("SellUnitWave", { Text = "Sell at Wave", Tooltip = "0 = the stage's last wave; stages with no last wave are skipped.", Default = cfg.sell.wave, Min = 0, Max = 100, Rounding = 0, Callback = set(cfg.sell, "wave") })
     sell:AddDropdown("SellUnitTypes", { Text = "Select Stage Type", Tooltip = "None selected = every stage type.", Values = Game.STAGE_TYPES, Multi = true, Default = Core.keys(cfg.sell.types), Callback = set(cfg.sell, "types") })
     sell:AddDivider()
-    sell:AddToggle("SellFarm", { Text = "Auto Sell Farm", Tooltip = "Sell your farm (money) units at the wave below. Unsellable units are skipped.", Default = cfg.sell_farm.enable, Callback = set(cfg.sell_farm, "enable") })
+    sell:AddToggle("SellFarm", { Text = "Auto Sell Farm", Tooltip = "Sells your placed farm (money) units at the wave below. Your collection is not touched. Unsellable units are skipped.", Default = cfg.sell_farm.enable, Callback = set(cfg.sell_farm, "enable") })
     sell:AddSlider("SellFarmWave", { Text = "Sell at Wave", Tooltip = "0 = the stage's last wave.", Default = cfg.sell_farm.wave, Min = 0, Max = 100, Rounding = 0, Callback = set(cfg.sell_farm, "wave") })
     sell:AddDropdown("SellFarmTypes", { Text = "Select Stage Type", Tooltip = "None selected = every stage type.", Values = Game.STAGE_TYPES, Multi = true, Default = Core.keys(cfg.sell_farm.types), Callback = set(cfg.sell_farm, "types") })
 
     local leave = T:AddLeftGroupbox("Auto Leave", "log-out")
     leave:AddToggle("AutoLeave", { Text = "Auto Leave", Tooltip = "Return to the lobby at the wave below, after that wave's sales.", Default = cfg.leave.enable, Callback = set(cfg.leave, "enable") })
-    leave:AddSlider("AutoLeaveWave", { Text = "Leave at Wave", Default = cfg.leave.wave, Min = 0, Max = 100, Rounding = 0, Callback = set(cfg.leave, "wave") })
+    leave:AddSlider("AutoLeaveWave", { Text = "Leave at Wave", Tooltip = "0 = never leave.", Default = cfg.leave.wave, Min = 0, Max = 100, Rounding = 0, Callback = set(cfg.leave, "wave") })
 
     local mod = T:AddRightGroupbox("Auto Modifier", "layers")
     mod:AddToggle("ModAuto", { Text = "Auto Select Modifier", Tooltip = "Pick the offered modifier with the best priority (lowest number) that is under its cap.", Default = cfg.modifier.enable, Callback = set(cfg.modifier, "enable") })
     local prio = T:AddRightGroupbox("Modifier Priority", "list-ordered")
-    prio:AddLabel("The first card is picked first. - N + is the most picks per run (0 = no limit). Type a number in the left box and press Enter to move a card there; Shift + arrow moves 5, Ctrl + arrow goes to the top or bottom.", true)
+    prio:AddLabel("Top card is picked first. - N + = most picks per run (0 = no limit). Type a number or use the arrows (Shift = 5, Ctrl = top or bottom).", true)
     local CARD_ICONS = { { "Yen", "coins" }, { "Active Cooldown", "timer-reset" }, { "Cooldown", "timer" }, { "Boss", "skull" }, { "Blessings", "sparkles" }, { "Shield", "shield" },
         { "Explosive", "bomb" }, { "Curses", "ghost" }, { "Health", "heart" }, { "Speed", "gauge" }, { "Regen", "heart-pulse" }, { "Double", "zap" }, { "Attack", "swords" },
         { "Range", "crosshair" }, { "New Path", "route" } }
@@ -274,24 +224,18 @@ if Tabs then
     end)
 
     local perf = T:AddRightGroupbox("Performance (match only)", "gauge")
-    perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Omega optimizer: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })
-    perf:AddToggle("PerfDeleteMap", { Text = "Delete Map", Tooltip = "Hides decorative map parts and buildings; placeable ground, hills and paths stay. Off restores them.", Default = cfg.delete_map, Callback = set(cfg, "delete_map", deleteMap) })
-    perf:AddToggle("PerfBoostFps", { Text = "Boost FPS", Tooltip = "Plain materials, no shadows, effects or textures. Off restores them.", Default = cfg.boost_fps, Callback = set(cfg, "boost_fps", boostFps) })
-    perf:AddToggle("PerfBlackScreen", { Text = "Black Screen", Tooltip = "Turns 3D rendering off. Right-click toggles it while on.", Default = cfg.black_screen, Callback = set(cfg, "black_screen", blackScreen) })
+    perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Cuts lag: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })
+    perf:AddToggle("PerfBlackScreen", { Text = "Black Screen (right-click shows the game)", Tooltip = "Turns 3D rendering off to save power. While it is on, right-click to bring the picture back or hide it again.", Default = cfg.black_screen, Callback = set(cfg, "black_screen", blackScreen) })
 
     local place = T:AddLeftGroupbox("Placement (match only)", "map-pin")
     place:AddToggle("PlaceAnywhere", { Text = "Place Anywhere", Tooltip = "Click-place units on the road and on top of other units. A click inside a copy of the same unit is moved 0.85 studs aside (the server refuses closer). Unit cap and money still apply.", Default = cfg.place_anywhere, Callback = set(cfg, "place_anywhere") })
 end
 -- Apply saved choices after a teleport (toggle callbacks do not fire for their Default).
--- Performance Mode already does what Delete Map and Boost FPS do (it destroys the decor and sets plain materials), so with it on the other two are not
--- run at match start: all three on meant two more passes over the whole map about 3 s after loading and two handlers per new instance all match.
-if cfg.delete_map and not cfg.performance_mode then whenMapReady(function() if cfg.delete_map then deleteMap(true) end end) end
 if cfg.performance_mode then omega(true) end
-if (cfg.boost_fps and not cfg.performance_mode) or cfg.black_screen then
+if cfg.black_screen then
     task.spawn(function()
         if not waitLoaded() then return end
-        if cfg.boost_fps and not cfg.performance_mode then boostFps(true) end
-        if cfg.black_screen then blackScreen(true) end
+        blackScreen(true)
     end)
 end
 

@@ -1,5 +1,5 @@
--- Misc and Settings tabs (docs/features/misc-settings.md): Teleport to Lobby if Players Join, Walk Around,
--- UI control, failsafe (auto rejoin, ping freeze), script config export / import / reset, themes, information.
+-- Misc and Settings tabs (docs/features/misc-settings.md): Teleport to Lobby if Players Join, Walk To Units,
+-- UI control, failsafe (auto rejoin), script config export / import / reset, themes, information.
 -- Options live in Core.config.misc (hub.json).
 local Hub = ...
 local Core = Hub.Core
@@ -14,8 +14,10 @@ local MATCH = Hub.mode == "match"
 
 local cfg = Core.config.misc or {}
 Core.config.misc = cfg
-local defaults = { lobby_on_join = false, walk = false, walk_units = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true, ping_freeze = false }
+local defaults = { lobby_on_join = false, walk_units = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
+-- Walk Around and Rejoin Ping Freeze were removed 2026-11-10 (Walk To Units covers the first, the second never fired in the logs).
+cfg.walk, cfg.ping_freeze = nil, nil
 
 local function alive() return env.ZenoHub == Hub end
 local Misc = {}
@@ -77,37 +79,17 @@ if MATCH then
     end)
 end
 
--- Misc > Secure: Walk Around (the box is made by src/match.lua next to Anti-AFK)
+-- Misc > Secure: Walk To Units (the box is made by src/match.lua next to Anti-AFK)
 local secure = Hub.SecureBox
-if secure then
-    secure:AddToggle("WalkAround", { Text = "Walk Around", Tooltip = "Match only: every 20 to 40 s the character walks to a spot a few studs away.", Default = cfg.walk, Callback = set("walk") })
-end
 -- Walk To Units (user, 2026-11-03): Auto Play calls Misc.walkTo(position) after it places or upgrades a unit; the character walks next to it.
--- Walk Around stays quiet for a while after each such walk so the two do not pull the character apart.
-local lastWalkTo = 0
 function Misc.walkTo(pos)
     if not (MATCH and cfg.walk_units) then return end
     local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
     if not (hum and hum.Health > 0) then return end
-    lastWalkTo = os.clock()
     pcall(hum.MoveTo, hum, pos + Vector3.new(3, 0, 3))
 end
 if secure then
     secure:AddToggle("WalkToUnits", { Text = "Walk To Units", Tooltip = "Match only: the character walks to the unit Auto Play just placed or upgraded.", Default = cfg.walk_units, Callback = set("walk_units") })
-end
-if MATCH then
-    task.spawn(function()
-        while alive() do
-            task.wait(math.random(20, 40))
-            if os.clock() - lastWalkTo < 60 then continue end
-            local char = LP.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if cfg.walk and hum and root and hum.Health > 0 then
-                pcall(hum.MoveTo, hum, root.Position + Vector3.new(math.random(-10, 10), 0, math.random(-10, 10)))
-            end
-        end
-    end)
 end
 
 -- Settings > Information
@@ -115,6 +97,7 @@ local info = Tabs.Settings:AddLeftGroupbox("Information", "info")
 info:AddLabel("Zeno Hub | Anime Adventures", true)
 info:AddLabel(("Version: %s"):format(Hub.version ~= "" and Hub.version or "hosted build"), true)
 info:AddLabel("Auto Execute on Teleport: always on (the hub queues itself before every teleport).", true)
+info:AddLabel(("Log files: workspace/%s"):format(tostring(Core.paths.logs)), true)
 
 -- Settings > UI Control
 local ui = Tabs.Settings:AddLeftGroupbox("UI Control", "mouse-pointer-2")
@@ -130,11 +113,11 @@ local function showButton(v)
 end
 ui:AddToggle("UIButton", { Text = "Display Toggle UI Button", Tooltip = "A draggable on-screen button that shows or hides this window.", Default = cfg.ui_button, Callback = function(v) cfg.ui_button = v Core.save_config() showButton(v) end })
 if cfg.ui_button then showButton(true) end
+ui:AddButton({ Text = "Unload Hub (double-click)", Risky = true, Tooltip = "Stops every loop and removes this window until the next teleport or run.", DoubleClick = true, Func = function() Hub.unload() end })
 
 -- Settings > Failsafe
 local fs = Tabs.Settings:AddLeftGroupbox("Failsafe", "life-buoy")
-fs:AddToggle("AutoRejoin", { Text = "Auto Rejoin", Tooltip = "If you get kicked or disconnected, teleport back to the lobby. Only works while the script is running in the game; Roblox Account Manager (docs/features/relaunch.md) covers a closed client.", Default = cfg.auto_rejoin, Callback = set("auto_rejoin") })
-fs:AddToggle("PingFreeze", { Text = "Rejoin Ping Freeze", Tooltip = "Rejoin if the server ping value has not changed for 2 minutes (the connection froze).", Default = cfg.ping_freeze, Callback = set("ping_freeze") })
+fs:AddToggle("AutoRejoin", { Text = "Auto Rejoin", Tooltip = "If you get kicked or disconnected, teleport back to the lobby. Only works while the script is running in the game; it cannot reopen a closed Roblox client.", Default = cfg.auto_rejoin, Callback = set("auto_rejoin") })
 table.insert(Hub.connections, GuiService.ErrorMessageChanged:Connect(function()
     local msg = GuiService:GetErrorMessage()
     if cfg.auto_rejoin and msg ~= "" then
@@ -142,17 +125,6 @@ table.insert(Hub.connections, GuiService.ErrorMessageChanged:Connect(function()
         task.delay(3, Misc.rejoin, "error prompt: " .. msg)
     end
 end))
-task.spawn(function()
-    local ok, item = pcall(function() return game:GetService("Stats").Network.ServerStatsItem["Data Ping"] end)
-    if not ok then return Core.log("ping freeze: no Data Ping stat") end
-    local last, since = nil, os.clock()
-    while alive() do
-        task.wait(5)
-        local v = item:GetValue()
-        if v ~= last then last, since = v, os.clock()
-        elseif cfg.ping_freeze and os.clock() - since >= 120 then Misc.rejoin("ping frozen at " .. tostring(v)) end
-    end
-end)
 
 -- Settings > Script Config. The file is hub.json (every module's options) without the webhook URL.
 local cfgBox = Tabs.Settings:AddRightGroupbox("Script Config", "file-json")
@@ -203,11 +175,11 @@ function Misc.import(text)
     if not ok or type(t) ~= "table" or t.zeno_config ~= 1 or type(t.config) ~= "table" then return notify("That is not a Zeno Hub config.") end
     task.defer(swap, t.config)
 end
-cfgBox:AddButton({ Text = "Import Config", Tooltip = "Replaces your settings with the pasted config (a backup is kept in hub.backup.json) and reloads the hub. Your webhook URL stays.", DoubleClick = true, Func = function()
+cfgBox:AddButton({ Text = "Import Config (double-click)", Risky = true, Tooltip = "Replaces your settings with the pasted config (a backup is kept in hub.backup.json) and reloads the hub. Your webhook URL stays.", DoubleClick = true, Func = function()
     Misc.import(Library.Options.ImportConfig.Value)
 end })
 function Misc.reset() task.defer(swap, {}) end
-cfgBox:AddButton({ Text = "Reset Script Config", Tooltip = "Back to defaults (a backup is kept in hub.backup.json) and reload the hub. Your webhook URL stays.", DoubleClick = true, Func = Misc.reset })
+cfgBox:AddButton({ Text = "Reset Script Config (double-click)", Risky = true, Tooltip = "Back to defaults (a backup is kept in hub.backup.json) and reload the hub. Your webhook URL stays.", DoubleClick = true, Func = Misc.reset })
 
 -- Settings > Themes (Obsidian ThemeManager: presets, color editor, save / set as default)
 local TM = UI and UI.ThemeManager

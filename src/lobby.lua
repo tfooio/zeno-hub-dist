@@ -538,25 +538,6 @@ local function buildUI()
         Core.save_config()
     end })
 
-    -- Open GUI: any of the game's own windows.
-    local gui = Game.loader().load_client_service(script, "GUIService")
-    local guiKey, guiNames = {}, {}
-    for k, w in gui do
-        if type(k) == "string" and k:match("_ui$") and type(w) == "table" and type(w.toggle) == "function" then
-            local n = (k:sub(1, -4):gsub("_", " ")):gsub("(%a)(%w*)", function(a, b) return a:upper() .. b end)
-            guiKey[n] = k
-            table.insert(guiNames, n)
-        end
-    end
-    table.sort(guiNames)
-    local open = T:AddLeftGroupbox("Open GUI", "layout-grid")
-    open:AddDropdown("LobbyOpenGui", { Text = "Open GUI", Values = guiNames, AllowNull = true, Callback = function(v)
-        if not v then return end
-        local w = gui[guiKey[v]]
-        pcall(w.toggle, w)
-        Hub.UI.Library.Options.LobbyOpenGui:SetValue(nil)
-    end })
-
     -- Claimer
     local cl = T:AddLeftGroupbox("Claimer", "gift")
     cl:AddToggle("LobbyClaimQuest", { Text = "Auto Claim Quest", Default = cfg.claim.quest, Callback = set(cfg.claim, "quest") })

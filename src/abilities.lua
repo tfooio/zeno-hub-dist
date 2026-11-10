@@ -82,14 +82,13 @@ if Tabs then
             if cfg.smart_units[id] then table.insert(picked, defs[id].name) end
         end
     end
-    box:AddDropdown("AbilitySmartUnits", { Text = "Select Smart Units", Tooltip = "Smart Auto Ability only acts on these units.", Values = names, Multi = true, Default = picked, Callback = function(v)
+    box:AddDropdown("AbilitySmartUnits", { Text = "Select Smart Units", Tooltip = "Smart only acts on these. Commander, Windsong, Elfy: cast together as a 4-copy chain, nothing until all 4 are placed. Shadowgirl: copies take turns. Snow Reaper: one on at a time.", Values = names, Multi = true, Default = picked, Callback = function(v)
         cfg.smart_units = {}
         for name, on in v do if on and idByName[name] then cfg.smart_units[idByName[name]] = true end end
         Core.save_config()
     end })
     box:AddToggle("AbilityNormal", { Text = "Normal Auto Ability", Tooltip = "Casts ready abilities of the hotbar units Smart does not handle.", Default = cfg.normal, Callback = function(v) cfg.normal = v Core.save_config() end })
-    box:AddLabel("Buff chain (Commander, Windsong, Elfy): waits for 4 copies, then casts them at 0, 2, 30, 32 s per cooldown (more than 4: only 4 cast). Rotation (Shadowgirl): copies take turns, cooldown / copies apart but at least Min gap, only with an enemy in range. Meter rotation (Snow Reaper): one on at a time, switch before the bar runs out.", true)
-    box:AddSlider("AbilityGap", { Text = "Rotation Min gap (s)", Tooltip = "Effect length + how long enemies cannot be hit by it again (game Buffs data: stun 8 s, freeze 10 s). Shadowgirl: 4 s timestop + 8 s = 12.", Default = cfg.gap, Min = 0, Max = 30, Rounding = 1, Callback = function(v) cfg.gap = v Core.save_config() end })
+    box:AddSlider("AbilityGap", { Text = "Shadowgirl Min Gap (s)", Tooltip = "Only for Shadowgirl: the shortest wait between two of her time stops, so the next one does not land on enemies that cannot be stopped again yet. 12 = her 4 s stop + 8 s immunity. Lower it to stop more often.", Default = cfg.gap, Min = 0, Max = 30, Rounding = 1, Callback = function(v) cfg.gap = v Core.save_config() end })
 end
 
 if Hub.mode ~= "match" then return Abilities end

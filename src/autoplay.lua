@@ -21,7 +21,8 @@ local defaults = {
     distance = 50, ground = 60, hill = 80, margin = 0.3, pack = true,
     hybrid_hill = true, -- units that can stand on ground or hills (not buffers, not farms) take a hill when one is in reach: only units on a hill hit Soaring enemies
     kind = {}, mid = {}, slotpos = {}, -- per stage key
-    learned = {}, use_learned = true, -- per map: learned[map][slot] = { {x, y, z}, ... }
+    unit = {}, -- per unit id: { limit, ulimit, wave, uwave, order, uorder }, saved sparse (v7 below)
+    learned = {}, use_learned = true, -- per map, filled by the Map Picker (key names kept): learned[map][unit id] = { {x, y, z}, ... }, the n-th copy of that unit takes the n-th spot
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 -- Place order: Script = hotbar order, Custom = cfg.order. Someone who already moved a number keeps their order (Custom).
@@ -49,17 +50,84 @@ if cfg.version < 4 then
     cfg.method, cfg.version = METHODS[1], 4
     Core.save_config()
 end
+-- v5 (2026-11-10, UI organizing): Focus Farm Units, Upgrade Between Placements, Ground Percentage and the Preset dropdown were removed.
+-- Their saved values go back to the defaults so no old choice stays active with no control to change it. (The Summer autopilot still sets focus_farm on its own copy.)
+if cfg.version < 5 then
+    cfg.focus_farm, cfg.upgrade_place, cfg.ground, cfg.mode_preset, cfg.version = false, false, 60, {}, 5
+    Core.save_config()
+end
+-- v6 (2026-11-10): picked spots belong to the unit, not the hotbar slot. Entries keyed by a slot number (recorded by the removed Learn hook) are dropped.
+if cfg.version < 6 then
+    for _, perMap in cfg.learned do for key in perMap do if tonumber(key) then perMap[key] = nil end end end
+    cfg.version = 6
+    Core.save_config()
+end
+-- v7 (2026-11-10, user): Place Cap, Upgrade Cap, Place / Upgrade on Wave and the Place / Upgrade Order belong to the UNIT, not the hotbar slot
+-- (a team swap used to move every setting onto another unit). cfg.unit[unit id] = { limit, ulimit, wave, uwave, order, uorder }, saved sparse.
+-- The old per-slot arrays are kept in cfg.slot_legacy until the equipped team is known, then moved onto those units (adoptLegacy).
+local FIELDS = { "limit", "ulimit", "wave", "uwave", "order", "uorder" }
+local function isRank(f) return f == "order" or f == "uorder" end
+cfg.unit = cfg.unit or {}
+if cfg.version < 7 then
+    local legacy, any = {}, false
+    for _, f in FIELDS do
+        legacy[f] = type(cfg[f]) == "table" and table.clone(cfg[f]) or {}
+        for i = 1, 6 do
+            local v = legacy[f][i]
+            if v ~= nil and v ~= (isRank(f) and i or 0) then any = true end
+        end
+    end
+    if any then cfg.slot_legacy = legacy end
+    cfg.version = 7
+    Core.save_config()
+end
+-- The match code (and the Summer autopilot, with copies of its own) still reads cfg.limit[slot] and so on: these are views that ask which unit stands in
+-- that slot. Limits and waves are saved only when they differ from 0; an order is a rank and is always saved, a unit with none ranks by its slot.
+local slotUnit = {} -- hotbar slot -> unit id of the equipped team (the Units strip fills it in the lobby, the hotbar read in a match)
+local function view(field)
+    local rank = isRank(field)
+    return setmetatable({}, {
+        __index = function(_, slot)
+            local id = slotUnit[slot]
+            local u = id and cfg.unit[id]
+            local v = u and u[field]
+            if v ~= nil then return v end
+            return rank and slot or 0
+        end,
+        __newindex = function(_, slot, v)
+            local id = slotUnit[slot]
+            if not id then return end -- an empty slot has no unit to remember it for
+            local u = cfg.unit[id] or {}
+            cfg.unit[id] = u
+            if not rank and v == 0 then u[field] = nil else u[field] = v end -- (a and nil or v would keep the 0)
+            if next(u) == nil then cfg.unit[id] = nil end
+        end,
+    })
+end
+for _, f in FIELDS do cfg[f] = view(f) end
+local function adoptLegacy()
+    local L = cfg.slot_legacy
+    if not L or not next(slotUnit) then return end
+    for f, arr in L do
+        local moved = false
+        if isRank(f) then for i = 1, 6 do if arr[i] ~= nil and arr[i] ~= i then moved = true end end end
+        for slot, id in slotUnit do
+            local v = arr[slot]
+            if v ~= nil and (isRank(f) and moved or (not isRank(f) and v ~= 0)) then
+                cfg.unit[id] = cfg.unit[id] or {}
+                cfg.unit[id][f] = v
+            end
+        end
+    end
+    cfg.slot_legacy = nil
+    Core.save_config()
+end
+local function setTeam(ids) -- ids[slot] = unit id (nil = empty slot)
+    for i = 1, 6 do slotUnit[i] = ids[i] end
+    adoptLegacy()
+end
 
 local AutoPlay = {}
--- Preset: option values applied together (the UI controls are moved so they show it).
-local PRESETS = {
-    ["None (manual)"] = false,
-    ["Balanced"] = { opening = true, focus_farm = false, upgrade = true, method = METHODS[1] },
-    ["Farm first (long runs)"] = { opening = true, focus_farm = true, upgrade = true, method = METHODS[1] },
-    ["Max damage (short stages)"] = { opening = false, focus_farm = false, upgrade = true, method = METHODS[1] },
-}
-local PRESET_NAMES
-PRESET_NAMES = { "None (manual)", "Balanced", "Farm first (long runs)", "Max damage (short stages)" }
 local function alive() return env.ZenoHub == Hub end
 
 -- LevelData is set a moment after the match loads.
@@ -74,7 +142,7 @@ local function stageKey()
     local mode, map = Game.stage(level)
     return ("%s | %s | %s"):format(tostring(mode), tostring(map), tostring(level._difficulty))
 end
--- Map coordinates are the same in every mode that uses a map (raid and dungeon room: same spots), so learned data is per map.
+-- Map coordinates are the same in every mode that uses a map (raid and dungeon room: same spots), so picked spots are per map.
 local function mapKey()
     if not level then return "-" end
     local _, map = Game.stage(level)
@@ -112,12 +180,10 @@ if Tabs then
         if v and AutoPlay.start then AutoPlay.start() end
     end })
     main:AddToggle("AutoPlayUpgrade", { Text = "Enable Auto Upgrade", Tooltip = "Upgrades the placed units, biggest gain per yen first.", Default = cfg.upgrade, Callback = set("upgrade") })
-    main:AddToggle("AutoPlayFocusFarm", { Text = "Focus Farm Units", Tooltip = "Money units are placed and upgraded first.", Default = cfg.focus_farm, Callback = set("focus_farm") })
     main:AddToggle("AutoPlayShowPlan", { Text = "Show Plan", Tooltip = "Draws the spots the units still to place would take: a small stud with the hotbar slot number each, the path point, a green ring (ground radius) and a blue ring (hill radius) for the longest-range unit.", Default = false, Callback = function(v)
         if AutoPlay.showPlan then AutoPlay.showPlan(v) elseif v then lib:Notify("Show Plan works inside a match") end
     end })
     main:AddSlider("AP_Distance", { Text = "Distance Percentage", Tooltip = "Where along the enemy path your units stand: 0% = enemy spawn, 100% = your base.", Default = cfg.distance, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("distance") })
-    main:AddSlider("AP_Ground", { Text = "Ground Percentage", Tooltip = "How far from that path point ground units may stand, as a share of each unit's range. 0% = right at the point, 100% = anywhere in range. Units fill outward from the point.", Default = cfg.ground, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("ground") })
     main:AddSlider("AP_Hill", { Text = "Hill Percentage", Tooltip = "The same for hill units (and units that can use either): how far from the path point they may stand on hills, as a share of their range.", Default = cfg.hill, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("hill") })
     main:AddToggle("AP_HybridHill", { Text = "Hybrid Units on Hills", Tooltip = "Units that can stand on ground or hills (not buffers, not money units) take a hill spot when one is within Hill Percentage of the path point, because Soaring enemies only take damage from units on a hill. With no hill in reach they stand on the ground as before.", Default = cfg.hybrid_hill, Callback = set("hybrid_hill") })
     -- Same saved key as the old Joiner > Portal Joiner toggle (joiner.portal.lanes), now for every stage.
@@ -173,7 +239,7 @@ if Tabs then
     local function unitName(i, eq) local d = eq[i] and units[eq[i]] return d and d.name or "empty" end
     local function paint(eq)
         for i, c in cells do c.line.Color = i == sel and lib.Scheme.AccentColor or lib.Scheme.OutlineColor end
-        picked:SetText(("Unit %d: %s"):format(sel, unitName(sel, eq or equipped())))
+        picked:SetText(("Unit %d: %s (its settings follow it into any slot or team)"):format(sel, unitName(sel, eq or equipped())))
     end
     local function portraits(eq)
         local hb = LP:FindFirstChild("PlayerGui") and LP.PlayerGui:FindFirstChild("spawn_units")
@@ -202,11 +268,13 @@ if Tabs then
         while not lib.Unloaded do
             local ok, err = pcall(function()
                 local eq = equipped()
+                setTeam(eq)
                 local sig = table.concat({ eq[1] or "-", eq[2] or "-", eq[3] or "-", eq[4] or "-", eq[5] or "-", eq[6] or "-" }, ",")
                 if sig ~= shown then
                     shown, lastEq = sig, eq
                     portraits(eq)
                     paint(eq)
+                    AutoPlay.selectSlot(sel) -- the selected slot may hold another unit now: show its settings
                     if AutoPlay.refreshLists then AutoPlay.refreshLists() end
                 end
             end)
@@ -226,7 +294,7 @@ if Tabs then
     end
     local per = Tabs.AutoPlay:AddLeftTabbox()
     local t1 = per:AddTab("Caps")
-    t1:AddLabel("Place Cap: copies to place. 0 = as many as allowed, -1 = leave this slot out.", true)
+    t1:AddLabel("Place Cap: copies to place. 0 = as many as allowed, -1 = leave this unit out.", true)
     perUnit(t1, "limit", "Place Cap", -1, 10)
     t1:AddLabel("Upgrade Cap: level to stop at. 0 = maximum, -1 = after the other units, -2 = never.", true)
     perUnit(t1, "ulimit", "Upgrade Cap", -2, 12)
@@ -238,11 +306,7 @@ if Tabs then
     -- Everything else, grouped by purpose.
     local adv = Tabs.AutoPlay:AddRightTabbox()
     local a1 = adv:AddTab("Behavior")
-    ui.preset = a1:AddDropdown("AP_Preset", { Text = "Preset", Tooltip = "Sets Smart Opening, Focus Farm, Auto Upgrade and Upgrade Method at once. It is remembered per stage type. None = leave everything as it is.", Values = PRESET_NAMES, Default = PRESET_NAMES[1], Callback = function(v)
-        if AutoPlay.applyPreset then AutoPlay.applyPreset(v, true) end
-    end })
     a1:AddToggle("AutoPlayOpening", { Text = "Smart Opening", Tooltip = "When your first unit is too expensive, place farm units first instead of waiting.", Default = cfg.opening, Callback = set("opening") })
-    a1:AddToggle("AutoPlayUpgradePlace", { Text = "Upgrade Between Placements", Tooltip = "One upgrade after every placement. Off: place everything first, then upgrade.", Default = cfg.upgrade_place, Callback = set("upgrade_place") })
     a1:AddToggle("AutoPlayFuse", { Text = "Auto Fuse Vegito", Tooltip = "With Carrot (Ultra) and Vego (Mage II) both on the hotbar: upgrades them only to level 7, casts the fusion on the better one (stat potentials, level, relic), then upgrades the Fused Hero to its maximum.", Default = cfg.fuse, Callback = set("fuse") })
     a1:AddDropdown("AP_Method", { Text = "Upgrade Method", Tooltip = "Cheapest first = buys any upgrade it can afford, farm units first, then the cheapest (never waits on an expensive one). The others: Smart = most damage per yen, or hotbar order, your own order, or the lowest level first. Upgrade Cap always applies.", Values = METHODS, Default = cfg.method, Callback = set("method", function(v)
         if v ~= METHODS[4] then cfg.method_script = v end -- what Script mode in the Upgrade Order list returns to
@@ -253,6 +317,8 @@ if Tabs then
     ui.stage = a2:AddLabel("Stage: join a match", true)
     a2:AddSlider("AP_Gap", { Text = "Space Between Units", Tooltip = "Extra studs left between units (they only need to not touch).", Default = cfg.margin, Min = 0, Max = 6, Rounding = 1, Callback = set("margin") })
     a2:AddToggle("AP_Pack", { Text = "Pack Units Tight", Tooltip = "Needs Place Anywhere on (Game tab). Units stand 1 stud apart around the path point and may stand on the road. Off: hitboxes must not touch, the road is avoided, Space Between Units applies.", Default = cfg.pack, Callback = set("pack") })
+    -- The Map Picker's spots (Map Picker box, saved per map); the key AutoPlayUseLearned is the old name, kept so saved configs still match.
+    a2:AddToggle("AutoPlayUseLearned", { Text = "Use Map Picker Spots", Tooltip = "Units are placed on the spots you picked in the Map Picker box first; the usual placing fills the rest. Off = the Map Picker's spots are ignored.", Default = cfg.use_learned, Callback = set("use_learned") })
     ui.kind = a2:AddDropdown("AP_Kind", { Text = "Center Units On", Tooltip = "The enemy path (automatic), or a position you saved for this stage.", Values = KINDS, Default = KINDS[1], Callback = function(v)
         cfg.kind[stageKey()] = v ~= KINDS[1] and v or nil
         Core.save_config()
@@ -274,25 +340,13 @@ if Tabs then
         if x then assign({ tonumber(x), tonumber(y), tonumber(z) }) else lib:Notify("Use X, Y, Z") end
     end })
     a2:AddButton({ Text = "Clear This Position", Func = function() assign(nil) end })
-    a2:AddButton({ Text = "Clear All Positions (this stage)", DoubleClick = true, Func = function()
+    a2:AddButton({ Text = "Clear All Positions (this stage) (double-click)", Risky = true, DoubleClick = true, Func = function()
         local key = stageKey()
         cfg.mid[key], cfg.slotpos[key] = nil, nil
         Core.save_config()
         if AutoPlay.refreshLabels then AutoPlay.refreshLabels() end
     end })
     ui.posinfo = a2:AddLabel("Saved: none", true)
-
-    local a3 = adv:AddTab("Learn")
-    a3:AddLabel("Turn Learn on, place your units by hand, turn it off. Auto Play then copies your spots on this map.", true)
-    a3:AddToggle("AutoPlayLearn", { Text = "Learn My Placements", Tooltip = "Replaces what was learned before for this map.", Default = false, Callback = function(v)
-        if AutoPlay.learn then AutoPlay.learn(v) elseif v then lib:Notify("Learn inside a match") end
-    end })
-    a3:AddToggle("AutoPlayUseLearned", { Text = "Use Learned Spots", Default = cfg.use_learned, Callback = set("use_learned") })
-    a3:AddButton({ Text = "Forget Learned Spots (this map)", DoubleClick = true, Func = function()
-        cfg.learned[mapKey()] = nil
-        Core.save_config()
-        lib:Notify("Forgot the learned spots of " .. mapKey())
-    end })
 
     local a4 = adv:AddTab("Target")
     a4:AddDropdown("AP_Priority", { Text = "Target Priority", Tooltip = "Who your units shoot at. Game default leaves it alone.", Values = PRIOS, Default = cfg.priority, Callback = set("priority") })
@@ -393,14 +447,14 @@ if Tabs then
         table.insert(lists, L)
     end
     makeList("Place Order", "list-ordered", {
-        field = "order", hint = "Script = hotbar order (farm units first when Focus Farm is on). Custom = your order. Skip leaves the unit out.",
+        field = "order", hint = "Script = hotbar order. Custom = your order, kept per unit. Skip leaves the unit out.",
         isCustom = function() return cfg.place_custom end,
         setCustom = function(v) cfg.place_custom = v Core.save_config() end,
         skipped = function(slot) return cfg.limit[slot] == -1 end,
         toggle = function(slot) cfg.limit[slot] = cfg.limit[slot] == -1 and 0 or -1 Core.save_config() syncSlider("limit", slot) end,
     })
     makeList("Upgrade Order", "arrow-up-narrow-wide", {
-        field = "uorder", hint = "Script = the Upgrade Method (Behavior tab) decides. Custom = your order. Skip never upgrades the unit.",
+        field = "uorder", hint = "Script = the Upgrade Method (Behavior tab) decides. Custom = your order, kept per unit. Skip never upgrades the unit.",
         extra = function(box)
             box:AddToggle("AP_UpgradeOne", { Text = "One at a time", Default = cfg.upgrade_one, Callback = set("upgrade_one"),
                 Tooltip = "Custom order only. On: the first unit in the list is upgraded first and the hub waits for the money, never moving on. Off: buys the first affordable unit in your order, so cheaper units further down still get upgraded while it saves up." })
@@ -415,7 +469,10 @@ if Tabs then
     })
     function AutoPlay.refreshLists() for _, L in lists do L.refresh() end end
     lastEq = equipped()
+    setTeam(lastEq)
     AutoPlay.refreshLists()
+    function AutoPlay.unitName(i) return unitName(i, lastEq) end -- for the Map Picker
+    function AutoPlay.unitId(i) return lastEq[i] end -- unit id of hotbar slot i (nil = empty), for the Map Picker
 end
 
 function AutoPlay.refreshLabels()
@@ -428,35 +485,12 @@ function AutoPlay.refreshLabels()
     if learned then
         local n = 0
         for _, l in learned do n += #l end
-        table.insert(parts, ("learned %d spots"):format(n))
+        table.insert(parts, ("picked %d spots"):format(n))
     end
     ui.posinfo:SetText("Saved: " .. table.concat(parts, "; "))
     ui.kind:SetValue(cfg.kind[key] or KINDS[1])
 end
 if Tabs then pcall(AutoPlay.refreshLabels) end
-
--- Moves the UI controls (their callbacks write cfg); `remember` stores the choice for this match's stage type.
-function AutoPlay.applyPreset(name, remember)
-    local p = PRESETS[name]
-    if remember and level then
-        local mode = Game.stage(level)
-        if mode then cfg.mode_preset[mode] = name Core.save_config() end
-    end
-    if not p then return end
-    local lib = Hub.UI and Hub.UI.Library
-    local ctl = { opening = "AutoPlayOpening", focus_farm = "AutoPlayFocusFarm", upgrade = "AutoPlayUpgrade", method = "AP_Method" }
-    for key, v in p do
-        cfg[key] = v
-        local c = lib and (lib.Toggles[ctl[key]] or lib.Options[ctl[key]])
-        if c then pcall(c.SetValue, c, v) end
-    end
-    Core.save_config()
-end
-if level then
-    local mode = Game.stage(level)
-    local saved = mode and cfg.mode_preset[mode]
-    if saved and ui.preset then ui.preset:SetValue(saved) end
-end
 
 local lastStatus
 local function status(text)
@@ -501,6 +535,9 @@ local function hotbar()
         local d = u and defs[u.unit_id]
         if d then out[slot] = { uuid = uuid, id = u.unit_id, def = d, owned = u, traits = u.traits } end
     end
+    local ids = {}
+    for slot, h in out do ids[slot] = h.id end
+    setTeam(ids)
     return out
 end
 
@@ -956,9 +993,9 @@ table.insert(Hub.connections, game.ReplicatedStorage:WaitForChild("endpoints"):W
     lastMsg, lastMsgAt = tostring(text), os.clock()
 end))
 
-local function learnedSpot(slot, nth)
+local function learnedSpot(unitId, nth)
     local l = cfg.learned[mapKey()]
-    local list = l and l[tostring(slot)]
+    local list = l and l[tostring(unitId)]
     local p = list and list[nth]
     return p and Vector3.new(p[1], p[2], p[3])
 end
@@ -976,9 +1013,21 @@ local function place(slot, h, units, live)
     local list, checked, tries = {}, 0, 0
     for _, boost in BOOSTS do -- wider search when nothing in the pass before passed the hitbox check
     list = rank(slot, h, placed, center, around, boost)
-    local nth = 1
-    for _, u in units do if isCopy(u, h) then nth += 1 end end
-    local lp = cfg.use_learned and learnedSpot(slot, nth)
+    local nth = 1 -- spots belong to the unit: its n-th copy on the field takes the n-th spot, whatever slot or team it is in
+    for _, u in units do if u._stats.id.Value == h.id then nth += 1 end end
+    local lp = cfg.use_learned and learnedSpot(h.id, nth)
+    if lp and lp.Y == 0 then -- picked on the Map Picker (no height saved): take the ground height from the route point nearest to it
+        local y0, near = 0, math.huge
+        for _, l in lanes do
+            for i = 1, #l.samples, 4 do
+                local q = l.samples[i].p
+                local d = (q.X - lp.X) ^ 2 + (q.Z - lp.Z) ^ 2
+                if d < near then near, y0 = d, q.Y end
+            end
+        end
+        local g = cell(math.floor(lp.X / STEP + 0.5), math.floor(lp.Z / STEP + 0.5), y0)
+        lp = g and Vector3.new(lp.X, g.pos.Y, lp.Z) or nil -- no ground there: skip the spot, the usual placing goes on
+    end
     if lp then
         local c = cell(math.floor(lp.X / STEP + 0.5), math.floor(lp.Z / STEP + 0.5), lp.Y)
         table.insert(list, 1, { pos = lp, score = 1e9, cls = c and c.cls or "?", key = math.floor(lp.X / STEP + 0.5) * 100003 + math.floor(lp.Z / STEP + 0.5), learned = true })
@@ -1018,7 +1067,7 @@ local function place(slot, h, units, live)
             task.spawn(learnPaid, moneyBefore, h.def.cost * modifier("player_cost_scale"))
             if Hub.Misc and Hub.Misc.walkTo then Hub.Misc.walkTo(c.pos) end -- Misc > Walk To Units
             table.insert(recent, { pos = c.pos, r = hitR(h.def), t = os.clock() })
-            logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " learned" or "", tag))
+            logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " picked" or "", tag))
             task.delay(1, function()
                 -- tag the model (Hill Percentage share) and set the target priority
                 for _, u in myUnits() do
@@ -1079,53 +1128,9 @@ local function place(slot, h, units, live)
     return false, ("no spot (%d candidates, %d checked, %d tried)"):format(#list, checked, tries)
 end
 
--- Learn: the game's own spawn_unit calls (not ours) are recorded per map and slot.
-local learning = false
-local function installLearnHook()
-    if env.ZenoLearnHook then return end
-    env.ZenoLearnHook = true
-    local old
-    old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        if env.ZenoLearnHandler and not checkcaller() and getnamecallmethod() == "InvokeServer" and self.Name == "spawn_unit" then
-            pcall(env.ZenoLearnHandler, ...)
-        end
-        return old(self, ...)
-    end))
-end
-env.ZenoLearnHandler = function(uuid, cf)
-    if not (alive() and learning and typeof(cf) == "CFrame" and hb) then return end
-    local pos = cf.Position
-    task.delay(1.5, function()
-        for slot, h in hb do
-            if h.uuid == uuid then
-                for _, u in myUnits() do
-                    local q = u:GetPivot().Position
-                    if isCopy(u, h) and (q.X - pos.X) ^ 2 + (q.Z - pos.Z) ^ 2 < 1.5 then
-                        local mk = mapKey()
-                        cfg.learned[mk] = cfg.learned[mk] or {}
-                        local l = cfg.learned[mk][tostring(slot)] or {}
-                        cfg.learned[mk][tostring(slot)] = l
-                        table.insert(l, { pos.X, pos.Y, pos.Z })
-                        Core.save_config()
-                        logLine(("learned slot %d %s at (%.0f, %.0f) (#%d)"):format(slot, h.id, pos.X, pos.Z, #l))
-                        if AutoPlay.refreshLabels then pcall(AutoPlay.refreshLabels) end
-                        return
-                    end
-                end
-            end
-        end
-    end)
-end
-function AutoPlay.learn(on)
-    learning = on
-    if on then
-        installLearnHook()
-        cfg.learned[mapKey()] = {}
-        Core.save_config()
-        Hub.UI.Library:Notify("Learning: place your units by hand. Turn it off when done.", 6)
-    end
-    if AutoPlay.refreshLabels then pcall(AutoPlay.refreshLabels) end
-end
+-- "Learn My Placements" (a namecall hook that recorded your own spawn_unit calls) was removed 2026-11-10: it was never verified, never used, and the
+-- Map Picker fills the same per-map store. A hook installed earlier in this session stays in the game, so clear its handler: with none it only passes calls through.
+env.ZenoLearnHandler = nil
 
 ------------------------------------------------------------------ economy, upgrades, holds
 -- Income estimate: positive money deltas over a 12 s window (spending shows as negative and is ignored).

@@ -78,7 +78,7 @@ local function refreshLife()
     local normal, shiny = 0, 0
     for _, s in pd._hatched_unit_stats or {} do normal += s.normal or 0 shiny += s.shiny or 0 end
     local lines = {
-        ("Trait rerolls (remnants): %s"):format(commas(pd.total_trait_rerolls or 0)),
+        ("Total trait rerolls: %s"):format(commas(pd.total_trait_rerolls or 0)),
         ("Units summoned: %s (%s shiny)"):format(commas(normal + shiny), commas(shiny)),
     }
     local rows = {}

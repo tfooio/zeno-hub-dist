@@ -32,13 +32,13 @@ if Tabs then
     skip:AddSlider("AutoSkipStop", { Text = "Stop Skip at Wave", Tooltip = "Turn Auto Skip off from this wave on. 0 = never stop. Only in the stage types below.", Default = cfg.skip_stop, Min = 0, Max = 100, Rounding = 0, Callback = set("skip_stop") })
     skip:AddDropdown("AutoSkipTypes", { Text = "Select Stage Type", Tooltip = "Where Stop Skip at Wave applies; other types keep skipping.", Values = Game.STAGE_TYPES, Multi = true, Default = Core.keys(cfg.skip_types), Callback = set("skip_types") })
     local fin = Tabs.Game:AddRightGroupbox("Game Finished", "flag")
-    fin:AddLabel("Tries the first available of Next, Replay, Lobby.", true)
+    fin:AddLabel("First available of Next, Replay, Lobby. A Dungeon run, Relic Farm, Summer Hunt or banner teleport can override it.", true)
     fin:AddToggle("AutoNext", { Text = "Auto Next", Default = cfg.next, Callback = set("next") })
     fin:AddToggle("AutoReplay", { Text = "Auto Replay", Default = cfg.replay, Callback = set("replay") })
     fin:AddToggle("AutoLobby", { Text = "Auto Return Lobby", Default = cfg.lobby, Callback = set("lobby") })
     fin:AddSlider("AutoFinishDelay", { Text = "Delay (s)", Default = cfg.finish_delay, Min = 0, Max = 30, Rounding = 0, Callback = set("finish_delay") })
     local secure = Tabs.Misc:AddLeftGroupbox("Secure", "shield")
-    Hub.SecureBox = secure -- src/misc.lua adds Walk Around here
+    Hub.SecureBox = secure -- src/misc.lua adds Walk To Units here
     secure:AddToggle("AntiAfk", { Text = "Anti-AFK", Default = cfg.anti_afk, Callback = set("anti_afk") })
     secure:AddToggle("LoadFailsafe", { Text = "Loading Failsafe", Tooltip = "If the game's loading screen stays up for the time below, teleport to the lobby.", Default = cfg.load_failsafe, Callback = set("load_failsafe") })
     secure:AddSlider("LoadTimeout", { Text = "Loading Timeout (s)", Default = cfg.load_timeout, Min = 30, Max = 300, Rounding = 0, Callback = set("load_timeout") })

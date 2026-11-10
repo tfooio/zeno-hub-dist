@@ -20,7 +20,7 @@ cfg.follow = cfg.follow or {}
 if cfg.follow.enable == nil then cfg.follow.enable = true end
 cfg.follow.units = cfg.follow.units or 3 -- teammates' damage units to wait for
 cfg.follow.wave = cfg.follow.wave or 7 -- or this wave, whichever comes first
-cfg.shop = cfg.shop or { enable = false, keep = 0 } -- Auto Summon Summer Banner: on / Summer Pearls to leave untouched
+cfg.shop = cfg.shop or { enable = false, keep = 2000 } -- Auto Summon Summer Banner: on / Summer Pearls to leave untouched (a first run keeps 2,000; an existing saved value is not touched)
 cfg.sellSkins = cfg.sellSkins or { enable = false, rarity = { Rare = true } } -- Auto Sell Skins: on / skin rarities to sell
 cfg.merchant = cfg.merchant or { enable = false, items = {}, known = {}, gemKeep = 5000 } -- Auto Buy Summer Merchant: on / item ids to buy / ids seen so far / gems never spent
 cfg.bingo = cfg.bingo or { enable = false } -- Auto Claim Summer Bingo
@@ -1058,19 +1058,22 @@ end
 local Tabs = Hub.UI and Hub.UI.Tabs
 if Tabs then
     local lib = Hub.UI.Library
+    -- Options that do not apply to the current choices are hidden (docs/review/findings.md, UI proposal B1); applyVis runs after every box exists and on each choice.
+    local function applyVis() end -- replaced below; a saved-config load may fire a callback before then
+    local followT, followU, followW, hpS, speedS, cbox, wbox
     local hunt_box = Tabs.Summer:AddLeftGroupbox("Summer Hunt", "sun")
     if not LOBBY then hunt_box:AddLabel("Works in the lobby only (saved here).", true) end
-    hunt_box:AddToggle("SummerMM", { Text = "Use Matchmaking", Tooltip = "Queues in Global Matchmaking instead of the solo pad; the hub types the game's captcha for you.", Default = cfg.matchmaking, Callback = function(v) cfg.matchmaking = v Core.save_config() end })
-    hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather, joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
+    hunt_box:AddToggle("SummerMM", { Text = "Use Matchmaking", Tooltip = "Queues in Global Matchmaking instead of the solo pad; the hub types the game's captcha for you. Turning it on shows the Follow Teammates options.", Default = cfg.matchmaking, Callback = function(v) cfg.matchmaking = v Core.save_config() applyVis() end })
+    hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather (this swaps your equipped units), joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
     hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
-    hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "Only with Use Matchmaking on and no party: farms go down at once, the other units wait for the other players' damage units (or the wave below), then stand where theirs stand along the path. In a party or with friends your units place normally.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() end })
-    hunt_box:AddSlider("SummerFollowUnits", { Text = "Wait for Teammate Units", Tooltip = "Damage units of the other players to wait for before placing yours.", Default = cfg.follow.units, Min = 1, Max = 12, Rounding = 0, Callback = function(v) cfg.follow.units = v Core.save_config() end })
-    hunt_box:AddSlider("SummerFollowWave", { Text = "Place Anyway at Wave", Tooltip = "Your units are placed at this wave even when the teammates have not placed enough.", Default = cfg.follow.wave, Min = 1, Max = 30, Rounding = 0, Callback = function(v) cfg.follow.wave = v Core.save_config() end })
-    hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward. Custom: your own order from Custom Card Priority.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() end })
+    followT = hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "Only with Use Matchmaking on and no party: farms go down at once, the other units wait for the other players' damage units (or the wave below), then stand where theirs stand along the path. In a party or with friends your units place normally.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() applyVis() end })
+    followU = hunt_box:AddSlider("SummerFollowUnits", { Text = "Wait for Teammate Units", Tooltip = "Damage units of the other players to wait for before placing yours.", Default = cfg.follow.units, Min = 1, Max = 12, Rounding = 0, Callback = function(v) cfg.follow.units = v Core.save_config() end })
+    followW = hunt_box:AddSlider("SummerFollowWave", { Text = "Place Anyway at Wave", Tooltip = "Your units are placed at this wave even when the teammates have not placed enough.", Default = cfg.follow.wave, Min = 1, Max = 30, Rounding = 0, Callback = function(v) cfg.follow.wave = v Core.save_config() end })
+    hunt_box:AddDropdown("SummerCardMode", { Text = "Card Preset", Tooltip = "Easy: buffs only, debuff cards ignored. Medium: also Enemy Regen and Enemy Shield, nothing else. Hard: the card tuner (takes more debuff cards after a win, fewer after a loss). Impossible: every debuff card, highest tier first, for the biggest pearl reward. Custom: your own order from Custom Card Priority. Medium shows the Enemy Health / Speed Cap sliders, Custom shows the two priority lists.", Values = CARD_MODES, Default = cfg.cardMode, Callback = function(v) cfg.cardMode = v Core.save_config() applyVis() end })
     hunt_box:AddToggle("SummerStarCards", { Text = "Always Take Star Cards", Tooltip = "Inside Auto Summer Hunt, always takes the card that gives 5 Star Remnants (the late tier III debuff cards at waves 38, 41 and 47, and Random Curses II), whatever the preset or the health / speed caps say, and the Starfall card Wishing Star (+100% Star Golem Chance, the golems drop Broken Star). Those debuff cards make the stage harder.", Default = cfg.starCards, Callback = function(v) cfg.starCards = v Core.save_config() end })
-    hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
-    hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })
+    hpS = hunt_box:AddSlider("SummerHpCap", { Text = "Enemy Health Cap (%)", Tooltip = "Medium preset: Enemy Health cards are taken until their total extra enemy health reaches this; a card that would pass it is skipped.", Default = cfg.hpCap, Min = 0, Max = 500, Rounding = 0, Callback = function(v) cfg.hpCap = v Core.save_config() end })
+    speedS = hunt_box:AddSlider("SummerSpeedCap", { Text = "Enemy Speed Cap (%)", Tooltip = "Medium preset: same as the health cap, for Enemy Speed cards.", Default = cfg.speedCap, Min = 0, Max = 200, Rounding = 0, Callback = function(v) cfg.speedCap = v Core.save_config() end })
     local status = hunt_box:AddLabel("Weather: -", true)
     local plan = hunt_box:AddLabel("Plan: -", true)
     if LOBBY then
@@ -1089,8 +1092,8 @@ if Tabs then
 
     -- Custom card preset: the list the Custom entry of Card Preset follows.
     if Hub.UIKit then
-        local cbox = Tabs.Summer:AddRightGroupbox("Custom Card Priority", "list-ordered")
-        cbox:AddLabel("Used when Card Preset is Custom. The first card is picked first. Type a number in the left box and press Enter to move a card there; Shift + arrow moves 5, Ctrl + arrow goes to the top or bottom. Weather Cards covers every weather card.", true)
+        cbox = Tabs.Summer:AddRightGroupbox("Custom Card Priority", "list-ordered")
+        cbox:AddLabel("Used with Card Preset = Custom. Top card is picked first. Type a number or use the arrows (Shift = 5, Ctrl = top or bottom).", true)
         -- Short row names (the "Enemy" prefix is on 21 of the 42 cards) and the Game tab's card icons, so a narrow window still shows what each row is.
         local ICONS = { { "Yen", "coins" }, { "Active Cooldown", "timer-reset" }, { "Cooldown", "timer" }, { "Boss", "skull" }, { "Blessings", "sparkles" }, { "Shield", "shield" },
             { "Explosive", "bomb" }, { "Curses", "ghost" }, { "Health", "heart" }, { "Speed", "gauge" }, { "Regen", "heart-pulse" }, { "Double", "zap" }, { "Attack", "swords" },
@@ -1124,8 +1127,8 @@ if Tabs then
         end)
 
         -- The weather cards, ordered among themselves; where the group stands is the Weather Cards row above.
-        local wbox = Tabs.Summer:AddRightGroupbox("Custom Weather Card Priority", "cloud-sun")
-        wbox:AddLabel("Part of the Custom preset: the order of the weather cards among themselves. The Weather Cards row in the list above sets where the whole group stands. Other Weather is any weather card not listed.", true)
+        wbox = Tabs.Summer:AddRightGroupbox("Custom Weather Card Priority", "cloud-sun")
+        wbox:AddLabel("Order of the weather cards among themselves (Custom preset). Where they rank overall is the Weather Cards row above.", true)
         local witems = {}
         for _, n in WEATHER_LIST do
             local w = WEATHER_OF[n]
@@ -1151,12 +1154,24 @@ if Tabs then
             wlist.refresh()
         end)
     end
+    applyVis = function()
+        local function vis(o, on) if o then o:SetVisible(on and true or false) end end
+        local follow = cfg.matchmaking and true or false
+        vis(followT, follow)
+        vis(followU, follow and cfg.follow.enable)
+        vis(followW, follow and cfg.follow.enable)
+        vis(hpS, cfg.cardMode == "Medium")
+        vis(speedS, cfg.cardMode == "Medium")
+        vis(cbox, cfg.cardMode == "Custom")
+        vis(wbox, cfg.cardMode == "Custom")
+    end
+    applyVis()
 
     local shop = Tabs.Summer:AddRightGroupbox("Summer Shop", "shopping-cart")
     shop:AddToggle("SummerShopStars", { Text = "Auto Summon Summer Banner", Tooltip = "Summons the Summer banner (150 Summer Pearls a pull, x10 while the pearls allow, then singles). It spends every pearl above Keep Summer Pearls.", Default = cfg.shop.enable, Callback = function(v) cfg.shop.enable = v Core.save_config() end })
     shop:AddSlider("SummerShopKeep", { Text = "Keep Summer Pearls", Tooltip = "Pearls the auto buy never spends (for the 5,000-pearl items).", Default = cfg.shop.keep, Min = 0, Max = 100000, Rounding = 0, Callback = function(v) cfg.shop.keep = v Core.save_config() end })
 
-    shop:AddToggle("SummerSellSkins", { Text = "Auto Sell Skins", Tooltip = "Deletes this event's skins of the rarities below (the game has no sell for skins). One copy of a skin stays while a unit that can wear it has no summer skin yet.", Default = cfg.sellSkins.enable, Callback = function(v) cfg.sellSkins.enable = v Core.save_config() end })
+    shop:AddToggle("SummerSellSkins", { Text = "Auto Sell Skins (DELETES them)", Tooltip = "Permanently deletes this event's skins of the rarities below (the game has no sell for skins). One copy of a skin stays while a unit that can wear it has no summer skin yet.", Default = cfg.sellSkins.enable, Callback = function(v) cfg.sellSkins.enable = v Core.save_config() end })
     shop:AddDropdown("SummerSellRarity", { Text = "Select Auto Sell Rarity (Skins)", Tooltip = "Rare is Ichigo's, Epic Sakamoto's and Bulby's, Legendary Homura's, Frieren's, Gilgamesh's, Law's and Saber's, Mythic Giselle's.", Values = { "Rare", "Epic", "Legendary", "Mythic" }, Multi = true, Default = Core.keys(cfg.sellSkins.rarity), Callback = function(v)
         cfg.sellSkins.rarity = {}
         for name, on in v do if on then cfg.sellSkins.rarity[name] = true end end
@@ -1202,7 +1217,8 @@ if Tabs then
             refreshMerchant()
         end)
     end
-    mbox:AddToggle("SummerBingo", { Text = "Auto Claim Summer Bingo", Tooltip = "Claims the Summer Bingo board whenever a row, column or diagonal is ready (checked every 30 s in the lobby).", Default = cfg.bingo.enable, Callback = function(v) cfg.bingo.enable = v Core.save_config() end })
+    -- In the Shop box, not the Merchant's: it claims a reward board, it buys nothing.
+    shop:AddToggle("SummerBingo", { Text = "Auto Claim Summer Bingo", Tooltip = "Claims the Summer Bingo board whenever a row, column or diagonal is ready (checked every 30 s in the lobby).", Default = cfg.bingo.enable, Callback = function(v) cfg.bingo.enable = v Core.save_config() end })
 
     -- Team editor: one weather at a time, six slots (slot order is your hotbar order, so Auto Play's per-slot settings follow it).
     local box = Tabs.Summer:AddLeftGroupbox("Weather Teams", "users")
@@ -1265,7 +1281,7 @@ if Tabs then
             end
         end)
     end
-    box:AddButton({ Text = "Fill Saved Teams from Planner", Tooltip = "Writes the planner's team for every weather into the saved teams, so you can adjust single slots.", DoubleClick = true, Func = function()
+    box:AddButton({ Text = "Fill Saved Teams from Planner (double-click)", Tooltip = "Writes the planner's team for every weather into the saved teams, so you can adjust single slots.", DoubleClick = true, Func = function()
         local ok, err = pcall(function()
             for _, id in WEATHERS do cfg.teams[id] = (Summer.plan(id)) end
             cfg.teams.default = (Summer.plan("clear"))
@@ -1273,17 +1289,17 @@ if Tabs then
             Core.save_config()
             show()
         end)
-        lib:Notify(ok and "Saved teams filled from the planner" or "Planner failed, see the log", 4)
+        lib:Notify(ok and "Saved teams filled from the planner" or "Planner failed, details are in the log", 4)
         if not ok then Core.log("ERROR summer fill", err) end
     end })
-    box:AddButton({ Text = "Copy to All Weathers", Tooltip = "Copies this weather's team to every weather, then edit the ones that differ.", DoubleClick = true, Func = function()
+    box:AddButton({ Text = "Copy to All Weathers (double-click)", Tooltip = "Copies this weather's team to every weather, then edit the ones that differ.", DoubleClick = true, Func = function()
         local src = cfg.teams[cfg.edit] or {}
         for _, id in WEATHERS do cfg.teams[id] = table.clone(src) end
         cfg.teams.default = table.clone(src)
         Core.save_config()
         lib:Notify("Copied to every weather", 4)
     end })
-    box:AddButton({ Text = "Clear This Weather", DoubleClick = true, Func = function()
+    box:AddButton({ Text = "Clear This Weather (double-click)", Risky = true, DoubleClick = true, Func = function()
         cfg.teams[cfg.edit] = nil
         Core.save_config()
         show()

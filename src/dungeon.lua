@@ -539,16 +539,15 @@ if Tabs then
     local T = Tabs.Dungeon
     local run = T:AddLeftGroupbox("Dungeon Run", "skull")
     run:AddToggle("JoinDungeonRun", { Text = "Auto Join Dungeon Run", Tooltip = "Enters the best room of the current run (lobby, and after each dungeon match), and handles shop, shrine and chest rooms.", Default = cfg.enable, Callback = set1("enable") })
-    run:AddToggle("DungeonStart", { Text = "Auto Start Dungeon", Tooltip = "Starts a new run when none is active (may use a Dungeon Run Key).", Default = cfg.start, Callback = set1("start") })
+    run:AddToggle("DungeonStart", { Text = "Auto Start Dungeon", Tooltip = "Starts a new run when none is active. A run can cost a Dungeon Run Key, so leave this off to keep yours.", Default = cfg.start, Callback = set1("start") })
     run:AddToggle("DungeonChestEnd", { Text = "Open All Chests at the End", Tooltip = "After beating the last room (your luck is highest then) every stored chest is opened before leaving. Chest rooms on the way only keep them. Off = chests are never opened.", Default = cfg.chest_end ~= false, Callback = set1("chest_end") })
     lastPick = run:AddLabel("Last pick: -", true)
 
-    local labels, byLabel = {}, {}
-    for _, ty in ROOM_DEFAULT do table.insert(labels, ROOM_LABEL[ty]) byLabel[ROOM_LABEL[ty]] = ty end
+    -- Room Priority: the six room types as a rank list (it was six dropdowns). cfg.rooms is unchanged: type ids best first; a type left out of it ranks last.
     local rooms = T:AddRightGroupbox("Room Priority", "list-ordered")
-    local roomDD, roomNote = {}, nil
+    local roomNote, roomList = nil, nil
     local function roomNoteOf(name) for _, x in ROOM_PRESETS do if x.name == name then return x.note end end return "" end
-    rooms:AddDropdown("DungeonRoomPreset", { Text = "Room Preset", Values = ROOM_PRESET_NAMES, Default = cfg.room_preset, Callback = function(v)
+    rooms:AddDropdown("DungeonRoomPreset", { Text = "Room Preset (then press Apply)", Values = ROOM_PRESET_NAMES, Default = cfg.room_preset, Callback = function(v)
         cfg.room_preset = v
         if roomNote then roomNote:SetText(roomNoteOf(v)) end
     end })
@@ -556,15 +555,21 @@ if Tabs then
     rooms:AddButton("Apply Room Preset", function()
         local p = Dungeon.apply_room_preset(cfg.room_preset)
         if not p then return end
-        for i = 1, #roomDD do roomDD[i]:SetValue(p.order[i] and ROOM_LABEL[p.order[i]] or nil) end
+        if roomList then roomList.refresh() end
         Hub.UI.Library:Notify(("Room preset applied: %s"):format(p.name))
     end)
-    rooms:AddLabel("The room with the best flag by this order is entered; ties go to the room with more good flags. You can still change each slot.", true)
-    for i = 1, #ROOM_DEFAULT do
-        roomDD[i] = rooms:AddDropdown("DungeonRoom" .. i, { Text = "Priority " .. i, Values = labels, Default = ROOM_LABEL[cfg.rooms[i] or ""], AllowNull = true, Callback = function(v)
-            cfg.rooms[i] = v and byLabel[v] or false
-            Core.save_config()
-        end })
+    rooms:AddLabel("The room with the best flag by this order is entered. Type a number or use the arrows to reorder.", true)
+    if Hub.UIKit then
+        local ICON = { ["3"] = "gem", ["4"] = "package", ["7"] = "landmark", ["1"] = "shopping-cart", ["2"] = "coins", ["0"] = "skull" }
+        local items = {}
+        for _, ty in ROOM_DEFAULT do items[#items + 1] = { key = ty, text = ROOM_LABEL[ty], icon = ICON[ty] } end
+        roomList = Hub.UIKit.rankList(Hub.UI.Library, rooms, "DungeonRoomList", {
+            items = items,
+            get = function() return cfg.rooms end, -- false holes and unknown ids are skipped by the list, a type missing from it is appended last
+            set = function(keys) cfg.rooms = table.clone(keys) Core.save_config() end,
+        })
+    else
+        rooms:AddLabel("The room order list needs the UI kit, which did not load. Reload the hub.", true)
     end
 
     -- Item names for the dropdowns; the module's data may not be loaded yet right after a teleport.
@@ -591,12 +596,12 @@ if Tabs then
         local shrineT = shrine:AddToggle("DungeonShrine", { Text = "Auto Accept Shrine", Tooltip = "Accept a shrine's curse unless it is in Decline Shrine Curse. Off = always skip shrines.", Default = cfg.shrine, Callback = set1("shrine") })
         shrine:AddDropdown("DungeonDecline", { Text = "Decline Shrine Curse", Values = curseNames, Multi = true, Default = names(cfg.decline), Callback = pickSet("decline") })
         local shop = T:AddRightGroupbox("Shop", "shopping-cart")
-        local buyDD = shop:AddDropdown("DungeonBuy", { Text = "Auto Buy Dungeon Shop", Tooltip = "Items to buy in shops, best first in the order of the Shop Preset (default Balanced = the friend's). Needs the coins; none selected = buy nothing.", Values = buyNames, Multi = true, Default = names(cfg.buy), Callback = pickSet("buy") })
+        local buyDD = shop:AddDropdown("DungeonBuy", { Text = "Auto Buy Dungeon Shop", Tooltip = "Items to buy in shops, best first in the order of the Shop Preset (default Balanced). Needs the coins; none selected = buy nothing.", Values = buyNames, Multi = true, Default = names(cfg.buy), Callback = pickSet("buy") })
 
         -- Shop presets set only the shop's buy list and order (nothing else), in one click.
         local function noteOf(name) for _, x in PRESETS do if x.name == name then return x.note end end return "" end
         local note
-        shop:AddDropdown("DungeonPreset", { Text = "Shop Preset", Values = PRESET_NAMES, Default = cfg.preset, Callback = function(v)
+        shop:AddDropdown("DungeonPreset", { Text = "Shop Preset (then press Apply)", Values = PRESET_NAMES, Default = cfg.preset, Callback = function(v)
             cfg.preset = v
             if note then note:SetText(noteOf(v)) end
         end })
@@ -621,7 +626,7 @@ if Tabs then
                 "You have 5 hearts. A lost match costs 1 heart and you must replay the same room; at 0 hearts the run ends.",
                 "Chests are collected as you go. Open them in a chest-open room (every 5 depths) or at the end; waiting for the end gives a chance at a secret limited unit.",
                 "Hoard rooms drop dungeon coins. Spend them in shops after a won match; items last for the rest of the run. Dungeon matches start with 2500 yen.",
-                "Cursed items make enemies harder. Shrines offer stronger curses at a chance of greatly boosted rewards (what exactly it boosts: UNVERIFIED).",
+                "Cursed items make enemies harder. Shrines offer stronger curses at a chance of greatly boosted rewards (the game does not say which rewards it boosts).",
             } do howto:AddLabel(line, true) end
 
             local rooms = I:AddLeftGroupbox("Rooms", "door-open")

@@ -45,55 +45,28 @@ local Window = Library:CreateWindow({
     Animations = { ToggleWindow = false, TabSwitch = true, Groupbox = false, Dropdown = true, KeyPicker = false },
 })
 
--- Same tabs and order as Nousigi (docs/roadmap.md); sections are added by the modules that own them.
+-- The tabs of Nousigi (docs/roadmap.md), ordered by what you do (docs/review/findings.md, UI proposal B):
+-- set up (Lobby, Joiner, Macro, Webhook), run unattended (Summer, Dungeon, Game, Auto Play, Misc), inspect (Info, Dungeon Info, Settings).
+-- Obsidian has no sidebar headers, so the order is the only grouping. Sections are added by the modules that own them.
 local Tabs = {
     Lobby = Window:AddTab("Lobby", "house"),
     Joiner = Window:AddTab("Joiner", "door-open"),
-    Summer = Window:AddTab("Summer", "sun"),
-    Dungeon = Window:AddTab("Dungeon", "skull"),
-    DungeonInfo = Window:AddTab("Dungeon Info", "book-open"),
-    Game = Window:AddTab("Game", "swords"),
-    AutoPlay = Window:AddTab("Auto Play", "bot"),
     Macro = Window:AddTab("Macro", "play"),
     Webhook = Window:AddTab("Webhook", "webhook"),
+    Summer = Window:AddTab("Summer", "sun"),
+    Dungeon = Window:AddTab("Dungeon", "skull"),
+    Game = Window:AddTab("Game", "swords"),
+    AutoPlay = Window:AddTab("Auto Play", "bot"),
     Misc = Window:AddTab("Misc", "ellipsis"),
     Info = Window:AddTab("Info", "info"),
+    DungeonInfo = Window:AddTab("Dungeon Info", "book-open"),
     Settings = Window:AddTab("Settings", "settings"),
 }
-
-local Debug = Tabs.Settings:AddLeftGroupbox("Debug", "bug")
-local labels = {}
-for _, key in { "mode", "level", "money", "wave", "base hp", "gems", "gold" } do
-    labels[key] = Debug:AddLabel(key .. ": -")
-end
-Debug:AddButton("Unload", function() Hub.unload() end)
 
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetFolder(Core.paths.config)
 SaveManager:LoadAutoloadConfig()
-
-local function refresh()
-    local s = Game.state()
-    labels.mode:SetText(("mode: %s (%d)"):format(Hub.mode, game.PlaceId))
-    labels.level:SetText("level: " .. tostring(s.level or "-"))
-    labels.money:SetText("money: " .. tostring(s.money or "-"))
-    labels.wave:SetText("wave: " .. tostring(s.wave or "-"))
-    labels["base hp"]:SetText(("base hp: %s / %s"):format(tostring(s.hp or "-"), tostring(s.max_hp or "-")))
-    if Hub.mode == "lobby" then
-        local pd = Game.profile()
-        labels.gems:SetText("gems: " .. tostring(pd and pd.gem_amount or "-"))
-        labels.gold:SetText("gold: " .. tostring(pd and pd.gold_amount or "-"))
-    end
-end
-
-task.spawn(function()
-    while not Library.Unloaded do
-        local ok, err = pcall(refresh)
-        if not ok then Core.log("ERROR ui refresh:", err) task.wait(10) end
-        task.wait(1)
-    end
-end)
 
 Library:OnUnload(function() Core.log("ui unloaded") end)
 

@@ -1,2 +1,2 @@
-b0937ba 2026-11-10
-Webhook: Star Remnant icon (shared by the Limited line), export override item icons
+cbe5cb0 2026-11-10
+UI text pass: clearer labels, red double-click buttons, shorter notes, webhook tooltips
