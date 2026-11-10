@@ -182,7 +182,9 @@ task.spawn(function()
             if u.Parent ~= workspace._UNITS then tracked[u], onAt[u] = nil, nil
             elseif buffOn(u) then onAt[u] = onAt[u] or os.clock()
             else
-                if onAt[u] and os.clock() - onAt[u] > 1 then Core.log("buff length", ("%.2f"):format(os.clock() - onAt[u])) end
+                -- only a length that is off: the normal 30 s one was 19,809 log lines in 3 days
+                local len = onAt[u] and os.clock() - onAt[u] or 0
+                if len > 1 and math.abs(len - BUFF_LEN) > 1 then Core.log("buff length", ("%.2f"):format(len)) end
                 onAt[u] = nil
             end
         end

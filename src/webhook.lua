@@ -9,6 +9,7 @@ if cfg.enabled == nil then cfg.enabled = false end
 cfg.url = cfg.url or ""
 if cfg.chest == nil then cfg.chest = true end
 
+cfg.emoji = cfg.emoji or {}
 if cfg.evolve == nil then cfg.evolve = false end
 cfg.evolve_sent = cfg.evolve_sent or {} -- unit uuids already pinged
 
@@ -99,8 +100,9 @@ local STAGE = { story = "Story", raid = "Raid", challenge = "Challenge", infinit
 -- Remnant totals (user, 2026-10-26): "(Total: N)" next to what a match or chest run gave. The lobby reads the real count
 -- from the profile (profile_data.inventory.normal_items); a match has no profile, so the last lobby reading is kept in
 -- Data/totals_<user>.json and each match's drops are added to it. Unknown total = no suffix, never a guess.
-local TRACK = { star_remnant = true, star_remnant_limited = true, SummerPearls = true }
+local TRACK = { star_remnant = true, star_remnant_limited = true, SummerPearls = true, gems = true, gold = true, xp = true, trait = true }
 local RESOURCE = { SummerPearls = true } -- kept in profile_data.resources (user, 2026-11-02), not inventory.normal_items
+local TOP = { gems = "gem_amount", gold = "gold_amount", xp = "player_xp", trait = "trait_reroll_tokens" } -- profile_data top-level fields (seen live 2026-11-10)
 local totalsFile = Core.paths.data .. "/totals_" .. game:GetService("Players").LocalPlayer.Name .. ".json"
 local totals = {}
 do
@@ -122,9 +124,10 @@ local function readProfileTotals()
     if type(items) ~= "table" and type(res) ~= "table" then return false end
     local changed = false
     for id in TRACK do
-        local src = RESOURCE[id] and res or items
+        local src = TOP[id] and pd or RESOURCE[id] and res or items
         if type(src) ~= "table" then continue end
-        local n = type(src[id]) == "number" and src[id] or 0
+        local key = TOP[id] or id
+        local n = type(src[key]) == "number" and src[key] or 0
         if totals[id] ~= n then totals[id] = n changed = true end
     end
     if changed then saveTotals() end
@@ -134,7 +137,26 @@ local function addGain(id, n)
     if TRACK[id] and totals[id] and tonumber(n) then totals[id] += tonumber(n) saveTotals() end
 end
 local function commas(n) return (tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")) end
-local function totalOf(id) return TRACK[id] and totals[id] and (" (Total: %s)"):format(commas(totals[id])) or "" end
+local function totalOf(id) return TRACK[id] and totals[id] and (" · %s total"):format(commas(totals[id])) or "" end
+
+-- Custom emoji for currencies: cfg.emoji["gems"] = "<:zh_gems:123...>" (pasted from Discord, see the Webhook tab).
+local function icon(key)
+    local e = cfg.emoji[tostring(key):lower()]
+    return e and (e .. " ") or ""
+end
+
+-- "Level 401 · 2,053 / 2,900 XP" from the tracked XP total and the game's own level formula.
+local function levelText()
+    if not totals.xp then return nil end
+    local ok, text = pcall(function()
+        local core = Game.loader().load_core_service(script, "LevelServiceCore")
+        local p = game:GetService("Players").LocalPlayer
+        local lv = core.calculate_level(p, totals.xp)
+        local base = core.calculate_xp(p, lv)
+        return ("Level %d · %s / %s XP"):format(lv, commas(totals.xp - base), commas(core.calculate_xp(p, lv + 1) - base))
+    end)
+    return ok and text or nil
+end
 if Hub.mode == "lobby" then
     task.spawn(function()
         while getgenv().ZenoHub == Hub do
@@ -152,7 +174,9 @@ else
 end
 
 -- Drop entries: {item_id, amount} (verified) or units; the same drop seen twice is added up.
-local function drop_lines(list, out)
+-- new_units entries are unit uuids (seen in the game's end-screen code); unit_ids[i] is the unit id the run log stored
+-- for entry i, else the collection is asked. A uuid is never shown.
+local function drop_lines(list, out, unit_ids)
     if type(list) ~= "table" then return end
     local sum, order, ids = {}, {}, {}
     local function add(name, n, id)
@@ -160,50 +184,92 @@ local function drop_lines(list, out)
         sum[name] += n
         ids[name] = id
     end
-    for _, d in list do
+    for i, d in list do
         if type(d) == "table" then
             local id = d.item_id or d.unit_id or d.id or d.name
             if id then add(d.unit_id and unitName(id) or itemName(id), tonumber(d.amount) or 1, not d.unit_id and id or nil)
             else table.insert(out, HttpService:JSONEncode(d)) end
+        elseif unit_ids then
+            local id = unit_ids[i] or type(d) == "string" and Game.unit_id(d) or nil
+            add(id and unitName(id) or "New unit", 1)
         else
             table.insert(out, tostring(d))
         end
     end
-    for _, name in order do table.insert(out, ("%s x%s%s"):format(name, num(sum[name]), totalOf(ids[name]))) end
+    for _, name in order do table.insert(out, ("%s **x%s**"):format(name, num(sum[name]))) end
+end
+
+-- Embed header: the game's own icon (public thumbnail of its universe) and name. Fetched once; a failed fetch is not cached.
+-- shortcut: the name is fixed per game script, set it when this module is reused for another game.
+local GAME_NAME = "Anime Adventures"
+local gameAuthor
+local function author()
+    if gameAuthor then return gameAuthor end
+    local a = { name = GAME_NAME }
+    local ok, res = pcall(request, { Url = ("https://thumbnails.roblox.com/v1/games/icons?universeIds=%d&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false"):format(game.GameId), Method = "GET" })
+    local ok2, body = pcall(HttpService.JSONDecode, HttpService, ok and res and res.StatusCode == 200 and res.Body or "")
+    local url = ok2 and type(body) == "table" and body.data and body.data[1] and body.data[1].imageUrl
+    if type(url) == "string" then a.icon_url = url gameAuthor = a end
+    return a
+end
+
+-- One gain line: icon, name, bold gain. Zero gains are left out by the caller; the totals are in the Balances fields.
+local function gainLine(key, name, n)
+    return ("%s%s **+%s**"):format(icon(key), name, commas(n))
+end
+
+-- Always shown on a match embed (user, 2026-11-10): {tracked id, label}, three per column. "-" = balance not read yet.
+local BALANCES = {
+    { "gems", "Gems" }, { "gold", "Gold" }, { "SummerPearls", "Summer Pearls" },
+    { "star_remnant", "Star Remnant" }, { "star_remnant_limited", "Star Remnant (Limited)" }, { "trait", "Trait Rerolls" },
+}
+local function balanceFields()
+    local cols = { {}, {} }
+    for i, b in BALANCES do
+        local n = totals[b[1]]
+        table.insert(cols[i <= 3 and 1 or 2], ("%s%s **%s**"):format(icon(b[1]), b[2], n and commas(n) or "-"))
+    end
+    return { name = "Balances", value = table.concat(cols[1], "\n"), inline = true },
+        { name = "\u{200b}", value = table.concat(cols[2], "\n"), inline = true }
 end
 
 function Webhook.embed(rec)
-    local rewards = { ("Gems: %s"):format(num(rec.gems)), ("Gold: %s"):format(num(rec.gold)), ("XP: %s"):format(num(rec.xp)) }
-    if type(rec.resources) == "table" then
-        for k, v in rec.resources do
-            if type(v) ~= "number" or v ~= 0 then table.insert(rewards, ("%s: %s%s"):format(itemName(k), num(v), totalOf(k))) end
-        end
+    local rewards = {}
+    if (rec.gems or 0) > 0 then table.insert(rewards, gainLine("gems", "Gems", rec.gems)) end
+    if (rec.gold or 0) > 0 then table.insert(rewards, gainLine("gold", "Gold", rec.gold)) end
+    for k, v in rec.resources or {} do
+        if type(v) == "number" and v > 0 then table.insert(rewards, gainLine(k, itemName(k), v)) end
     end
+    if (rec.xp or 0) > 0 then table.insert(rewards, ("XP **+%s**"):format(commas(rec.xp))) end
     local drops = {}
-    drop_lines(rec.new_units, drops)
+    drop_lines(rec.new_units, drops, rec.new_unit_ids or {})
     drop_lines(rec.new_items, drops)
     local stage = rec.stage or STAGE[rec.mode] or (rec.mode and readable(rec.mode)) or "-"
     if tostring(rec.name or ""):find("^Dungeon Room") then stage = "Dungeon Run" end
     local map = rec.map and data("Maps")[rec.map]
     local place = (map and map.name) or (rec.map and readable(rec.map)) or nil
-    local fields = {
-        { name = "Mode", value = ("%s / %s"):format(stage, tostring(rec.difficulty or "-")), inline = true },
-        { name = "Waves", value = ("%s / %s"):format(num(rec.waves), num(rec.num_waves)), inline = true },
-        { name = "Time", value = duration(rec.time), inline = true },
-        { name = "Kills", value = num(rec.kills), inline = true },
-        { name = "Damage", value = short(rec.damage), inline = true },
-        { name = "First clear", value = rec.first_completion and "yes" or "no", inline = true },
-        { name = "Rewards", value = table.concat(rewards, "\n"), inline = false },
-        { name = "Drops", value = #drops > 0 and table.concat(drops, "\n"):sub(1, 1000) or "none", inline = false },
-    }
+    local summary = { ("**%s** · %s"):format(stage, tostring(rec.difficulty or "-")),
+        ("Wave %s/%s"):format(num(rec.waves), num(rec.num_waves)), duration(rec.time) }
+    if (rec.kills or 0) > 0 then table.insert(summary, num(rec.kills) .. " kills") end
+    if (rec.damage or 0) > 0 then table.insert(summary, short(rec.damage) .. " damage") end
+    local description = table.concat(summary, "  ·  ") .. (rec.first_completion and "\n**First clear**" or "")
+    local fields = {}
+    if #rewards > 0 then table.insert(fields, { name = "Rewards", value = table.concat(rewards, "\n"), inline = false }) end
+    if #drops > 0 then table.insert(fields, { name = "Drops", value = table.concat(drops, "\n"):sub(1, 1000), inline = false }) end
+    local b1, b2 = balanceFields()
+    table.insert(fields, b1)
+    table.insert(fields, b2)
+    local footer = { tostring(rec.user or ""), levelText() }
+    local new_unit = type(rec.new_units) == "table" and #rec.new_units > 0
     return {
         username = "Zeno Hub",
         embeds = { {
-            title = rec.victory and "Victory - " .. (place and place .. " - " or "") .. tostring(rec.name or stage)
-                or "Defeat - " .. (place and place .. " - " or "") .. tostring(rec.name or stage),
-            color = rec.victory and 0x2ECC71 or 0xE74C3C,
+            author = author(),
+            title = (rec.victory and "Victory - " or "Defeat - ") .. (place and place ~= rec.name and place .. " - " or "") .. tostring(rec.name or stage),
+            description = description,
+            color = not rec.victory and 0xE74C3C or new_unit and 0x9B59B6 or rec.first_completion and 0xF1C40F or 0x2ECC71,
             fields = fields,
-            footer = { text = tostring(rec.user or "") },
+            footer = { text = table.concat(footer, "  ·  ") },
             timestamp = rec.date,
         } },
     }
@@ -215,7 +281,9 @@ local function rewardLine(line)
     local id, n = line:match("^(%S+) x(%d+)$")
     if id then return ("%s x%s%s"):format(itemName(id), n, totalOf(id)) end
     local u = line:match("^unit (%S+)$")
-    return u and ("Unit: " .. unitName(u)) or line
+    if not u then return line end
+    local uid = data("Units")[u] and u or Game.unit_id(u) -- the chest event sends uuids; never show one
+    return "Unit: " .. (uid and unitName(uid) or "New unit")
 end
 local function gainedLine(line)
     local id, d = line:match("^(%S+) ([+-]?%d+)$")
@@ -252,6 +320,7 @@ function Webhook.chestEmbed(rec)
         table.insert(fields, { name = "Inventory change since the last lobby visit", value = #g > 0 and table.concat(g, "\n"):sub(1, 1000) or "nothing changed", inline = false })
     end
     return { username = "Zeno Hub", embeds = { {
+        author = author(),
         title = opened and "Dungeon chests opened" or "Dungeon rewards",
         color = opened and 0xF1C40F or 0x9B59B6,
         fields = fields,
@@ -263,6 +332,15 @@ end
 local Tabs = Hub.UI and Hub.UI.Tabs
 local Library = Hub.UI and Hub.UI.Library
 local function notify(msg) Core.log("webhook:", msg) if Library then Library:Notify(msg, 4) end end
+
+local function lastRecord()
+    local file = Hub.RunLog and Hub.RunLog.file
+    if not file or not isfile(file) then return nil end
+    local last
+    for line in readfile(file):gmatch("[^\n]+") do last = line end
+    local ok, rec = pcall(HttpService.JSONDecode, HttpService, last or "")
+    return ok and type(rec) == "table" and rec or nil
+end
 
 if Tabs then
     local box = Tabs.Webhook:AddLeftGroupbox("Setting", "webhook")
@@ -280,10 +358,38 @@ if Tabs then
     })
     box:AddButton("Test Webhook", function()
         task.spawn(function()
-            local ok, code = Webhook.send({ username = "Zeno Hub", embeds = { { title = "Test", description = "Webhook works.", color = 0x5865F2, footer = { text = game:GetService("Players").LocalPlayer.Name } } } })
+            -- Resends the latest logged run in the current layout; a plain message when nothing is logged yet.
+            local rec = lastRecord()
+            local payload = rec and Webhook.embed(rec)
+                or { username = "Zeno Hub", embeds = { { title = "Test", description = "Webhook works.", color = 0x5865F2, footer = { text = game:GetService("Players").LocalPlayer.Name } } } }
+            if rec then payload.content = "Test: the latest logged run, sent again." end
+            local ok, code = Webhook.send(payload)
             notify(ok and "test sent" or ("test failed: " .. tostring(code)))
         end)
     end)
+    box:AddButton("Export currency icons", function()
+        task.spawn(function()
+            local ok, done, _, dir = pcall(function() return Hub.require("icons").export() end)
+            notify(ok and ("%d icons saved to workspace/%s"):format(#done, dir) or ("export failed: " .. tostring(done)))
+        end)
+    end)
+    local emojiCount = 0
+    for _ in cfg.emoji do emojiCount += 1 end
+    box:AddInput("WebhookEmoji", {
+        Text = ("Currency emoji (%d set)"):format(emojiCount),
+        Default = "",
+        Placeholder = "paste <:zh_gems:123...> <:zh_gold:456...>",
+        Finished = true,
+        Callback = function(v)
+            local n = 0
+            for name, id in (v or ""):gmatch("<a?:zh_([%w_]+):(%d+)>") do
+                cfg.emoji[name] = ("<:zh_%s:%s>"):format(name, id)
+                n += 1
+            end
+            if n > 0 then Core.save_config() end
+            notify(n > 0 and (n .. " emoji saved") or "no <:zh_name:id> emoji found")
+        end,
+    })
     box:AddInput("WebhookDiscordId", {
         Text = "Discord User ID (pings)",
         Default = cfg.discord_id or "",
@@ -307,6 +413,7 @@ local unsub = Core.on("run_finished", function(rec)
     -- Totals first, even with the notification off, so the next report is right.
     for _, d in rec.new_items or {} do if type(d) == "table" and d.item_id then addGain(d.item_id, d.amount) end end
     for k, v in rec.resources or {} do addGain(k, v) end
+    addGain("gems", rec.gems) addGain("gold", rec.gold) addGain("xp", rec.xp)
     if not cfg.enabled then return end
     task.spawn(function()
         local ok, code = Webhook.send(Webhook.embed(rec))

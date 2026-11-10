@@ -154,6 +154,7 @@ if Hub.UI and Hub.UI.Tabs then
     if Hub.mode ~= "lobby" then box:AddLabel("Works in the lobby only.", true) end
     box:AddToggle("SkinsAll", { Text = "Include older summer skins", Tooltip = "Off: only this event's skins. On: every owned *_summer skin too.", Default = cfg.all, Callback = function(v) cfg.all = v Core.save_config() end })
     box:AddButton({ Text = "Show Plan", Tooltip = "Lists which skin would go on which unit. Changes nothing.", Func = function()
+        if not Game.profile() then return Hub.UI.Library:Notify("Needs the lobby: your profile is not readable here", 5) end
         local ok, plan = pcall(Skins.plan)
         if not ok then return Core.log("ERROR skins plan", plan) end
         for _, s in plan do Core.log("skins plan:", s.skin, "->", s.unitId, s.wearing and ("(replaces " .. s.wearing .. ")") or "") end

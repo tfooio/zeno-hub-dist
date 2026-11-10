@@ -30,6 +30,9 @@ local Summer = {}
 local Units, Weather = Game.data("Units"), Game.data("Weather")
 local function alive() return env.ZenoHub == Hub end
 local function profile() return Game.loader().load_client_service(script, "LobbyServiceClient").session.profile_data end
+-- profile() errors while the game's session is not built yet (a few seconds after a teleport: 929 "attempt to index nil with 'profile_data'" lines in the logs
+-- 2026-11-06 to 11-09 from sell skins, plan, bingo, merchant), so the lobby jobs below wait for ready() instead.
+local function ready() return Game.profile() ~= nil end
 local function call(name, ...) local ok, res = pcall(Game.invoke, name, ...) if not ok then Core.log("ERROR summer", name, res) end return ok and res end
 local function wait(pred, sec)
     local t = os.clock()
@@ -268,6 +271,7 @@ local function teamFor(w)
         local t = (w and cfg.teams[w]) or cfg.teams.default
         if t and next(t) then return t, "saved team" end
     end
+    if not ready() then return nil end -- the planner reads the profile
     local ok, t, text = pcall(Summer.plan, w, nil, Summer.partyActive())
     if ok then return t, text end
     Core.log("ERROR summer plan", t)
@@ -359,8 +363,17 @@ local function hunt()
         return
     end
     Core.save_config()
-    Core.log("summer: joining the Hunt,", weatherName(w), cfg.matchmaking and "(matchmaking)" or "")
-    if cfg.matchmaking and Hub.Joiner then
+    -- Matchmaking that finds no match (2026-11-07: 41 queues in 100 min, 10 watchdog rejoins, nothing started): after two queues in a row with no Hunt,
+    -- this Hunt is played from the pad, solo (user, 2026-11-09). cfg.mmFails is saved (a watchdog rejoin reloads the hub) and cleared when a Hunt loads.
+    local mm = cfg.matchmaking and Hub.Joiner ~= nil
+    if mm and (cfg.mmFails or 0) >= 2 then
+        mm, cfg.mmFails = false, 0
+        Core.log("summer: matchmaking found no match twice in a row, this Hunt goes through the pad (solo)")
+    end
+    Core.log("summer: joining the Hunt,", weatherName(w), mm and "(matchmaking)" or "")
+    if mm then
+        cfg.mmFails = (cfg.mmFails or 0) + 1
+        Core.save_config()
         -- MiniTipex's log (2026-11-03): a join 6 s after the lobby loaded died on the popup UI not existing yet ("show_matchmaking_popup" on nil) and the 120 s
         -- wait set below was already running, so that Hunt was lost for two minutes. Wait for the UI, and retry a failed call soon.
         local function uiReady()
@@ -376,6 +389,8 @@ local function hunt()
         if not (ok and entered) then
             Core.log("summer: matchmaking not entered", ok and "" or tostring(entered))
             busyUntil = os.clock() + 10
+        else
+            Core.log("summer: matchmaking queue entered, try", cfg.mmFails)
         end
         return
     end
@@ -529,7 +544,7 @@ if LOBBY then
         task.wait(10)
         while alive() do
             for key, fn in { merchant = merchant, bingo = bingo } do
-                if cfg[key].enable then
+                if cfg[key].enable and ready() then
                     local ok, err = pcall(function()
                         if Hub.Lobby and Hub.Lobby.quietly then Hub.Lobby.quietly(fn) else fn() end
                     end)
@@ -595,7 +610,7 @@ end
 if LOBBY then
     task.spawn(function()
         while alive() do
-            if cfg.sellSkins.enable then local ok, err = pcall(Summer.sellSkins) if not ok then Core.log("ERROR summer sell skins", err) end end
+            if cfg.sellSkins.enable and ready() then local ok, err = pcall(Summer.sellSkins) if not ok then Core.log("ERROR summer sell skins", err) end end
             task.wait(4) -- the inventory fills 10 skins every 3.4 s while Auto Summon runs
         end
     end)
@@ -855,6 +870,10 @@ end
 
 -- Run logger (Data/summer_runs.jsonl, one JSON line per Hunt round) and the tuner's update. The pearl reward is stored as the game sends it.
 if not LOBBY then
+    -- A Hunt loaded: matchmaking works (LevelData is set a moment after the match loads, hence the delay).
+    task.delay(20, function()
+        if alive() and (cfg.mmFails or 0) > 0 and inHunt() then cfg.mmFails = 0 Core.save_config() end
+    end)
     local HttpService = game:GetService("HttpService")
     local function hotbarRecord()
         local out = {}
@@ -907,6 +926,9 @@ function Summer.pilot(defaults, methods)
     o.method = methods[2] -- most damage per yen (farms and the fusion pair still come first, see upgradeList)
     -- Placement order (user: everything placed as soon as possible, only the farms first): farms, then the two carries, the buffer, the support unit last.
     o.order = { 1, 6, 2, 3, 4, 5 }
+    -- Auto Play only reads `order` when place_custom is set (it was not, so every Hunt placed in hotbar order: log 2026-11-09, slots 1, 2, 2, 2, 2, 3, 3, 6 ...).
+    -- The order is made for the planner's team (support unit in slot 2); a saved team keeps the hotbar order, farms first.
+    o.place_custom = not cfg.manual
     o.kind, o.mid, o.slotpos, o.mode_preset = {}, {}, {}, {}
     -- Follow Teammates (user, 2026-11-03, for Use Matchmaking runs with strangers; not for parties): the farms are placed at once, the other units wait until
     -- cfg.follow.units damage units of the others stand or wave cfg.follow.wave is reached (Bulby is upgraded meanwhile, no cap on farms), then stand
@@ -934,7 +956,7 @@ function Summer.pilot(defaults, methods)
             local ok, n, med = pcall(Hub.AutoPlay.teammates)
             if ok and n > 0 and med then return med * 100 end
         end
-        return baseDistance
+        return (Summer.laneDistance and Summer.laneDistance()) or baseDistance -- more than one lane: where they meet (below)
     end })
     o.limit = setmetatable({}, { __index = function(_, slot) return (rule(slot)) end })
     o.ulimit = setmetatable({}, { __index = function(_, slot) return select(2, rule(slot)) end })
@@ -955,13 +977,12 @@ end
 -- Sky Portal: 3 lanes of 492 / 644 / 622 studs that all end at the base and are within 20 studs of each other from 93% of the longest lane; at 85% a unit on
 -- lane 2 was 30 studs from lane 1, out of its 21 range; the user called 93% "the perfect spot").
 local PORTAL_REACH = 18 -- studs: every other lane has to be this close to the spot (a unit's range is about 21 before upgrades)
-local function portalLevel()
-    local ok, ld = pcall(function() return Game.loader().LevelData end)
-    return ok and ld and ld._is_map_or_portal_level and ld.portal_group == "summer2" and ld or nil
-end
-local function portalOn()
+-- Every stage with more than one lane (user, 2026-11-09; it was Summer portals only): a Hunt on Sky Island stood at 50% of one lane, 116 studs from the
+-- other two, and the three multi-lane Hunt maps won 7 of 17 rounds against 154 of 192 on single-lane maps (summer_runs.jsonl). Saved maps with more than
+-- one lane: skypiea (lanes meet at 93%), shibuya (86%), assassin_park (64%). The toggle is still Joiner config portal.lanes (Auto Play tab).
+local function lanesOn()
     local j = Core.config.joiner and Core.config.joiner.portal
-    return j ~= nil and j.lanes ~= false and not LOBBY and portalLevel() ~= nil
+    return not LOBBY and not (j and j.lanes == false)
 end
 
 local laneCache -- nil: not read yet, false: one lane (nothing to change), number: percent along the longest lane
@@ -1015,21 +1036,22 @@ local function laneDistance()
         from = math.clamp(from, 0.5, 0.95)
     end
     laneCache = #lanes > 1 and from * 100 or false
-    Core.log(("summer portals: %d lane(s)%s"):format(#lanes, #lanes > 1 and (", units stand at %.0f%% of the longest lane"):format(from * 100) or ", Distance Percentage unchanged"))
+    if #lanes > 1 then Core.log(("lanes: %d, units stand at %.0f%% of the longest lane"):format(#lanes, from * 100)) end
     return laneCache or nil
 end
+function Summer.laneDistance() return lanesOn() and laneDistance() or nil end
 
--- A copy of the saved Auto Play settings with the lane based distance (the same trick as the Hunt's pilot: distance is read through __index).
-function Summer.portalPilot(saved)
-    if not portalOn() then return nil end
-    local o = copy(saved)
-    local base = o.distance
-    o.distance = nil
-    setmetatable(o, { __index = function(_, k)
-        if k ~= "distance" then return nil end
-        return laneDistance() or base
-    end })
-    return o
+-- The saved Auto Play settings behind a proxy that answers Distance Percentage from the lanes. Not a copy: what the Auto Play tab changes in the match
+-- is read at once and saved (a copy lost it at the next match).
+function Summer.lanePilot(saved)
+    if not lanesOn() then return nil end
+    return setmetatable({}, {
+        __index = function(_, k)
+            if k == "distance" then return laneDistance() or saved.distance end
+            return saved[k]
+        end,
+        __newindex = function(_, k, v) saved[k] = v end,
+    })
 end
 
 -- UI --------------------------------------------------------------------------------------------------------

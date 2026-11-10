@@ -1,4 +1,5 @@
 -- Stall watchdog (docs/features/summer-update.md): an unattended Auto Summer Hunt that stops moving is retried, then rejoined, and the webhook says so.
+-- Any mode: a match left on the end screen goes back to the lobby (endScreenCheck).
 -- Lobby: no teleport into a Hunt within Lobby Stall minutes -> retry the join at once, at twice that -> rejoin the lobby. Match (autopilot Hunt): the wave
 -- (or the end screen) has not changed for Match Stall minutes -> rejoin the lobby. The rejoin is remembered in the config so the next lobby reports it
 -- recovered. A summary of the Hunt rounds goes out every Summary Every hours. Needs a valid URL in the Webhook tab; without one it only logs.
@@ -84,6 +85,41 @@ local function lobbyCheck()
         cfg.pending = { time = os.time(), text = ("lobby stall, no Hunt in %d min"):format(cfg.lobby_min * 2) }
         notify("Stalled in the lobby", "Still no Hunt, rejoining.", 0xED4245)
         if Hub.Misc and Hub.Misc.rejoin then Hub.Misc.rejoin("watchdog: lobby stall") end
+    elseif stage == 2 and idle >= cfg.lobby_min * 2 + 3 then
+        loadedAt, stage = os.clock(), 0 -- the rejoin did not leave this server (Misc.rejoin gives up after 100 s): start over instead of staying silent
+    end
+end
+
+-- End screen (user, 2026-11-09): a match started by a joiner or Auto Summer Hunt never stays on the end screen. GameFinished up for 3 min with the hub
+-- alive means the finish chain did not get us out (every call tried once, an empty chain after a portal loss with Auto Return Lobby off, a dungeon room
+-- that would not open): the lobby remote first, the rejoin a minute later. A dungeon gets 10 min, its last room may still be opening chests
+-- (they are kept: the lobby opens them too). A seamless replay drops GameFinished and resets this.
+local function unattended()
+    if summerOn() then return Core.config.summer.role ~= "Member" end -- a member follows the host
+    if Core.config.party and Core.config.party.follow then return false end
+    for _, m in Core.config.joiner or {} do
+        if type(m) == "table" and m.enable then return true end
+    end
+    return false
+end
+local finAt, finStage = nil, 0
+local function endScreenCheck()
+    local data = workspace:FindFirstChild("_DATA")
+    local fin = data and data:FindFirstChild("GameFinished")
+    if not (fin and fin.Value and unattended()) then finAt, finStage = nil, 0 return end
+    finAt = finAt or os.clock()
+    local limit = (Hub.Dungeon and Hub.Dungeon.owns_finish() and 10 or 3) * 60
+    local up = os.clock() - finAt
+    if finStage == 0 and up >= limit then
+        finStage = 1
+        notify("Stuck on the end screen", ("%d min on the end screen, going back to the lobby."):format(limit / 60), 0xFEE75C)
+        Core.save_config() -- before the teleport (OnTeleport does not fire)
+        task.spawn(pcall, Hub.Game.invoke, "teleport_back_to_lobby")
+    elseif finStage == 1 and up >= limit + 60 then
+        finStage = 2
+        cfg.pending = { time = os.time(), text = "end screen, the lobby call did not teleport" }
+        notify("Stuck on the end screen", "Still here, rejoining.", 0xED4245)
+        if Hub.Misc and Hub.Misc.rejoin then Hub.Misc.rejoin("watchdog: end screen") end
     end
 end
 
@@ -110,6 +146,10 @@ task.spawn(function()
         if cfg.enable then
             local ok, err = pcall(LOBBY and lobbyCheck or matchCheck)
             if not ok then Core.log("ERROR watchdog", err) end
+            if not LOBBY then
+                ok, err = pcall(endScreenCheck)
+                if not ok then Core.log("ERROR watchdog end screen", err) end
+            end
         end
         tick += 1
         if tick % 12 == 0 and cfg.summary and os.time() - cfg.last_report >= cfg.summary_hours * 3600 then
@@ -125,7 +165,7 @@ local Tabs = Hub.UI and Hub.UI.Tabs
 if Tabs then
     local function set(key) return function(v) cfg[key] = v Core.save_config() end end
     local box = Tabs.Misc:AddLeftGroupbox("Stall Watchdog", "shield")
-    box:AddToggle("WatchdogEnable", { Text = "Stall Watchdog", Tooltip = "While Auto Summer Hunt runs: retries a lobby that never starts a Hunt, rejoins a match whose wave stopped, and reports both to the webhook (Webhook tab). Reports 'recovered' after the rejoin.", Default = cfg.enable, Callback = set("enable") })
+    box:AddToggle("WatchdogEnable", { Text = "Stall Watchdog", Tooltip = "While Auto Summer Hunt runs: retries a lobby that never starts a Hunt, rejoins a match whose wave stopped, and reports both to the webhook (Webhook tab). Reports 'recovered' after the rejoin. With any joiner or Auto Summer Hunt on: a match that sits on the end screen for 3 minutes (a dungeon: 10) goes back to the lobby.", Default = cfg.enable, Callback = set("enable") })
     box:AddSlider("WatchdogLobby", { Text = "Lobby Stall (minutes)", Tooltip = "No Hunt started after this long: retry. After twice as long: rejoin.", Default = cfg.lobby_min, Min = 2, Max = 30, Rounding = 0, Callback = set("lobby_min") })
     box:AddSlider("WatchdogMatch", { Text = "Match Stall (minutes)", Tooltip = "The wave (or end screen) has not changed this long: rejoin the lobby.", Default = cfg.match_min, Min = 2, Max = 30, Rounding = 0, Callback = set("match_min") })
     box:AddToggle("WatchdogSummary", { Text = "Hunt Summary Webhook", Tooltip = "Sends the rounds, wins and Summer Pearls of the last interval to the webhook.", Default = cfg.summary, Callback = set("summary") })

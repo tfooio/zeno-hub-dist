@@ -23,7 +23,8 @@ local defaults = {
 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 -- Portal tiers (user, 2026-11-04): tiered portals (Sky Portal: portal_depth 3 to 8) are opened lowest or highest tier first, within Lowest / Highest Tier;
--- lanes: Summer portals place where the lanes have met (src/summer.lua). Portals without a tier ignore the tier options.
+-- lanes: on a map with more than one lane Auto Play places where the lanes have met (src/summer.lua; every stage since 2026-11-09, toggle in the Auto Play tab).
+-- Portals without a tier ignore the tier options.
 cfg.portal.order = cfg.portal.order or "Lowest Tier First"
 cfg.portal.min = cfg.portal.min or 1
 cfg.portal.max = cfg.portal.max or 5
@@ -350,17 +351,20 @@ local function try(mode)
             equipTeam(mode, (plan.depth or 0) >= cfg.portal.highFrom and cfg.team.portal_high or nil)
             Core.log("joiner", mode, plan.name, plan.depth and plan.depth > 0 and ("tier " .. plan.depth) or "")
             Game.invoke("use_portal", plan.portal, { friends_only = true })
-            for _ = 1, 20 do pad = ownPortalPad() if pad then break end task.wait(0.25) end
+            -- 15 s: a pad that shows up late must not lead to a second use_portal (4 "portal not opened" in the logs, each followed by another call 3 s later)
+            for _ = 1, 60 do pad = ownPortalPad() if pad then break end task.wait(0.25) end
         end
-        if not pad then Core.log("joiner: portal not opened", plan.name) return false end
+        if not pad then
+            Core.log("joiner: portal not opened", plan.name)
+            backoff[mode] = os.clock() + 30
+            return false
+        end
         Core.save_config() -- before the teleport (OnTeleport does not fire)
         if Hub.Party then pcall(Hub.Party.wait_for_party, pad) end
         Game.invoke("request_start_game", pad.Name)
         task.wait(20)
-        if alive() then
-            Core.log("joiner: no teleport after start", mode, pad.Name)
-            pcall(Game.invoke, "request_leave_lobby", pad.Name)
-        end
+        -- The pad stays ours: the next pass starts it again. Leaving it and opening the portal again may cost another portal (UNVERIFIED either way).
+        if alive() then Core.log("joiner: no teleport after start, keeping the portal pad", mode, pad.Name) end
         return true
     end
     local pad = freePad(plan.folder)
@@ -370,6 +374,7 @@ local function try(mode)
     if Game.invoke("request_join_lobby", pad.Name) ~= true then Core.log("joiner: join refused", mode, pad.Name) return false end
     if plan.level and Game.invoke("request_lock_level", pad.Name, plan.level, true, plan.diff) ~= true then
         Core.log("joiner: lock refused", mode, plan.level)
+        backoff[mode] = os.clock() + 60 -- it was join, refused, leave again every 3 s
         Game.invoke("request_leave_lobby", pad.Name)
         if plan.on_fail then plan.on_fail() end
         return false
@@ -402,8 +407,12 @@ if Hub.mode == "lobby" then
                 -- Party farming, Follow Host: this account joins the host's pad instead of making its own.
                 if Hub.Party and Hub.Party.following() then break end
                 if cfg[mode].enable and (backoff[mode] or 0) < os.clock() then
-                    local started = try(mode)
-                    if started then backoff[mode] = os.clock() + 60 break end
+                    -- An error in a remote or a pad value used to end this loop for the whole lobby visit, with nothing in the hub log.
+                    local ok, started = xpcall(try, debug.traceback, mode)
+                    if not ok then
+                        Core.log("ERROR joiner", mode, started)
+                        backoff[mode] = os.clock() + 30
+                    elseif started then backoff[mode] = os.clock() + 60 break end
                 end
             end
             task.wait(3)
@@ -504,7 +513,6 @@ if Tabs then
     portal:AddSlider("JoinPortalMin", { Text = "Lowest Tier", Tooltip = "Tiered portals below this tier are skipped.", Default = cfg.portal.min, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "min") })
     portal:AddSlider("JoinPortalMax", { Text = "Highest Tier", Tooltip = "Tiered portals above this tier are skipped. Tier 3 / 4 / 5 / 6 / 8 Sky Portals have a difficulty scale of about 6 / 12 / 18 / 48 / 116.", Default = cfg.portal.max, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "max") })
     portal:AddSlider("JoinPortalHighFrom", { Text = "High Tier Team From", Tooltip = "Tiered portals at or above this tier load Portal Team (High Tier) from the Team Equipper box (the Vegito team, say). Below it the normal Portal Team, or your hotbar, is used.", Default = cfg.portal.highFrom, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "highFrom") })
-    portal:AddToggle("JoinPortalLanes", { Text = "Summer Portals: Place Where Lanes Meet", Tooltip = "In a Sky Portal or Explosion Mage's Portal with more than one enemy lane, Auto Play's Distance Percentage is taken from the map (where every lane is within 18 studs of the others) instead of your saved one. Everything else stays on your Auto Play settings, so Enable Auto Play has to be on.", Default = cfg.portal.lanes, Callback = set(cfg.portal, "lanes") })
 
     local daily = T:AddRightGroupbox("Daily Challenge Joiner", "calendar")
     daily:AddToggle("JoinDaily", { Text = "Auto Join Daily Challenge", Tooltip = "Solo, from the daily pad.", Default = cfg.daily.enable, Callback = set(cfg.daily, "enable") })

@@ -120,6 +120,11 @@ if Tabs then
     main:AddSlider("AP_Ground", { Text = "Ground Percentage", Tooltip = "How far from that path point ground units may stand, as a share of each unit's range. 0% = right at the point, 100% = anywhere in range. Units fill outward from the point.", Default = cfg.ground, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("ground") })
     main:AddSlider("AP_Hill", { Text = "Hill Percentage", Tooltip = "The same for hill units (and units that can use either): how far from the path point they may stand on hills, as a share of their range.", Default = cfg.hill, Min = 0, Max = 100, Rounding = 0, Suffix = "%", Callback = set("hill") })
     main:AddToggle("AP_HybridHill", { Text = "Hybrid Units on Hills", Tooltip = "Units that can stand on ground or hills (not buffers, not money units) take a hill spot when one is within Hill Percentage of the path point, because Soaring enemies only take damage from units on a hill. With no hill in reach they stand on the ground as before.", Default = cfg.hybrid_hill, Callback = set("hybrid_hill") })
+    -- Same saved key as the old Joiner > Portal Joiner toggle (joiner.portal.lanes), now for every stage.
+    local jp = Core.config.joiner and Core.config.joiner.portal
+    if jp then
+        main:AddToggle("AP_Lanes", { Text = "Place Where Lanes Meet", Tooltip = "On a map with more than one enemy lane (Sky Island, Shibuya, Assassin Park) the units stand where every lane is within 18 studs of the others, instead of at Distance Percentage. Maps with one lane are not changed.", Default = jp.lanes ~= false, Callback = function(v) jp.lanes = v Core.save_config() end })
+    end
     ui.status = main:AddLabel("Status: -", true)
     ui.slots = main:AddLabel("Slots: -", true)
 
@@ -463,10 +468,16 @@ if Hub.mode ~= "match" then return AutoPlay end
 
 -- Summer Hunt started by Auto Summer Hunt: its own settings on top of nothing (src/summer.lua); the saved config is not read or written.
 do
-    local ok, ov = pcall(function() return Hub.Summer and (Hub.Summer.pilot(defaults, METHODS) or Hub.Summer.portalPilot(cfg)) end)
+    -- pilot = the Hunt's own settings (a copy, nothing saved). lanePilot = the saved settings themselves, read and written through a proxy that only
+    -- answers Distance Percentage from the lanes on a multi-lane map (in-match toggles used to land on a copy and were gone next match).
+    local ok, ov, hunt = pcall(function()
+        local p = Hub.Summer and Hub.Summer.pilot(defaults, METHODS)
+        if p then return p, true end
+        return Hub.Summer and Hub.Summer.lanePilot(cfg), false
+    end)
     if ok and ov then
         cfg = ov
-        Core.log("autoplay: Summer autopilot settings")
+        if hunt then Core.log("autoplay: Summer autopilot settings") end
     elseif not ok then
         Core.log("ERROR autoplay pilot", ov)
     end
@@ -498,7 +509,21 @@ local function modifier(name)
     local v = m and m:FindFirstChild(name)
     return v and v.Value or 1
 end
-local function costScale() return modifier("player_cost_scale") end
+-- Real prices can be above the data: portals have modifiers, one doubles every cost unless Idol (Star) is on the team (user, 2026-11-09), and it is
+-- not in _DATA.LevelModifiers (3 days of logs: 2,472 upgrades refused in portals at "cost scale 1.00"). So the scale is learned from what the server
+-- takes for a purchase (rounded to 0.25: kill income lands in the same moment), and nudged up when an affordable upgrade is refused.
+local paidScale = 1
+local upBlock = setmetatable({}, { __mode = "k" }) -- unit -> os.clock() until which its upgrade is not tried again (it was just refused)
+local function costScale() return modifier("player_cost_scale") * paidScale end
+local function learnPaid(before, listed) -- money before the purchase, its price by the data (level modifier included)
+    local res = LP._stats.resource
+    for _ = 1, 10 do if res.Value < before then break end task.wait(0.05) end
+    local k = math.floor((before - res.Value) / math.max(listed, 1) * 4 + 0.5) / 4
+    if k >= 1 and k <= 3 and k ~= paidScale then
+        paidScale = k
+        Core.log(("autoplay prices: the server takes %.2f x the listed cost"):format(k))
+    end
+end
 
 local function isFarm(def) return (def.farm_amount or 0) > 0 end
 local function roleOf(def)
@@ -942,6 +967,7 @@ AutoPlay.learnedSpot, AutoPlay.mapKey = learnedSpot, mapKey -- exposed for check
 local logLine
 -- One placement for a hotbar slot. Returns true, or false and a reason.
 local slotBlock = {} -- slot -> os.clock() until which the slot is not tried again
+local noSpot = {} -- slot -> "no spot" results in a row this match (the retry wait doubles)
 local BOOSTS = { 1, 2, 4, 100 }
 local function place(slot, h, units, live)
     local center, around = centerFor(slot)
@@ -977,14 +1003,19 @@ local function place(slot, h, units, live)
         local before = os.clock()
         -- A refusal with a message is final for this spot; a silent one is tried up to 3 times, then the next spot is used.
         local res
+        local moneyBefore = LP._stats.resource.Value
         for attempt = 1, 3 do
             before = os.clock()
-            res = Game.invoke("spawn_unit", h.uuid, cf)
+            -- The server itself errors on the first placement of every multi-lane match ("attempt to index nil with 'spawn'", 65 of 65 on Shibuya,
+            -- Sky Island, Assassin Park; cause unknown): counted as a silent refusal instead of losing the tick.
+            local okCall, r = pcall(Game.invoke, "spawn_unit", h.uuid, cf)
+            res = okCall and r or nil
             if res == true or (lastMsgAt >= before - 0.05 and lastMsg) then break end
             if attempt < 3 then task.wait(0.35) end
         end
         if res == true then
             counts.placed += 1
+            task.spawn(learnPaid, moneyBefore, h.def.cost * modifier("player_cost_scale"))
             if Hub.Misc and Hub.Misc.walkTo then Hub.Misc.walkTo(c.pos) end -- Misc > Walk To Units
             table.insert(recent, { pos = c.pos, r = hitR(h.def), t = os.clock() })
             logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " learned" or "", tag))
@@ -1006,6 +1037,12 @@ local function place(slot, h, units, live)
         local msgd = lastMsgAt >= before - 0.05 and lastMsg
         local capMsg = msgd and tonumber(msgd:match("[Cc]annot place more than (%d+)"))
         if capMsg then
+            -- "(Global)" counts every player's copies (6 Elfy in a matchmaking Hunt): our cap is what we have standing, or the slot is asked for
+            -- every 2 s for the rest of the match (2,029 refusals in 3 days of logs).
+            if msgd:find("Global", 1, true) then
+                capMsg = 0
+                for _, u in units do if isCopy(u, h) then capMsg += 1 end end
+            end
             learnedCap[h.uuid] = capMsg
             counts.learned_cap += 1
             logLine(("server cap %d for slot %d %s (%s)"):format(capMsg, slot, h.id, msgd))
@@ -1151,12 +1188,16 @@ local function eligible(units)
     end
     local wave = workspace._wave_num.Value
     local farmSold = Hub.Gameplay and Hub.Gameplay.done and Hub.Gameplay.done.farm
+    -- While our Fused Hero stands the server refuses Carrot and Vego ("Unique units may not be placed with others of its kind"): both slots are full.
+    local fused = false
+    for _, u in units do if u._stats.id.Value == "vegito" then fused = true end end
     local list = {}
     for slot, h in hb do
         local lim = cfg.limit[slot]
         local cap = lim > 0 and math.min(lim, placementCap(h)) or placementCap(h)
         local farm = isFarm(h.def)
-        if lim ~= -1 and wave >= cfg.wave[slot] and (count[h.uuid] or 0) < cap and (slotBlock[slot] or 0) < os.clock() and not (farm and farmSold) then
+        if lim ~= -1 and wave >= cfg.wave[slot] and (count[h.uuid] or 0) < cap and (slotBlock[slot] or 0) < os.clock() and not (farm and farmSold)
+            and not (fused and (h.id == FUSE_CARROT or h.id == FUSE_VEGO)) then
             table.insert(list, { slot = slot, h = h, farm = farm, cost = h.def.cost * costScale() })
         end
     end
@@ -1214,7 +1255,7 @@ local function upgradeList(units)
         local extra = not slot and u._stats.max_upgrade.Value > 0 and defs[u._stats.id.Value]
         if extra then slot = 7 end
         local lim = slot and (cfg.ulimit[slot] or 0)
-        if slot and lim ~= -2 and wave >= (cfg.uwave[slot] or 0) then
+        if slot and lim ~= -2 and wave >= (cfg.uwave[slot] or 0) and (upBlock[u] or 0) < os.clock() then
             local st = u._stats
             local lvl, max = st.upgrade.Value, st.max_upgrade.Value
             local goal = lim > 0 and math.min(lim, max) or max
@@ -1542,8 +1583,17 @@ local function sampleEnemies()
 end
 
 local function doUpgrade(up)
+    local money = LP._stats.resource.Value
     local ok = Game.invoke("upgrade_unit_ingame", up.unit) == true
     counts.upgrades += ok and 1 or 0
+    if ok then
+        if up.cost > 0 then task.spawn(learnPaid, money, up.cost / paidScale) end
+    else
+        -- Refused: the next one in the order gets its turn for 2 s (a refused first upgrade used to hold every other one back, up to 347 calls in a row),
+        -- and with the money in hand the real price must be higher than we think.
+        upBlock[up.unit] = os.clock() + 2
+        if up.cost > 0 and money >= up.cost and paidScale < 3 then paidScale = math.min(3, paidScale * money / up.cost * 1.05) end
+    end
     if ok and Hub.Misc and Hub.Misc.walkTo then pcall(function() Hub.Misc.walkTo(up.unit:GetPivot().Position) end) end -- Misc > Walk To Units
     logLine(("upgrade slot %d %s %d -> %d cost %.0f value %.4f %s"):format(up.slot, up.id, up.lvl, up.lvl + 1, up.cost, up.value or 0, ok and "ok" or "refused"))
     return ok
@@ -1600,11 +1650,18 @@ function AutoPlay.start()
                 if want then
                     local placed, reason = place(want.slot, want.h, units, live)
                     if placed then
+                        noSpot[want.slot] = nil
                         owed = cfg.upgrade_place and cfg.upgrade
                         lastProgress = os.clock()
                         status(("placed slot %d %s%s"):format(want.slot, want.h.def.name or want.h.id, why and (" (" .. why .. ")") or ""))
                     else
-                        slotBlock[want.slot] = os.clock() + (reason == "cap" and 2 or (tostring(reason):find("Unique") and 120 or 10)) -- "Unique units may not be placed with others of its kind": the unit is still around (fused), retrying every 10 s only fills the log
+                        -- No spot (a hill unit on a map with no hill in reach: Carrot on the Artifact stage, 46 tries): 10, 20, 40 ... 120 s, each try is a full search.
+                        local wait = 10
+                        if tostring(reason):find("^no spot") then
+                            noSpot[want.slot] = (noSpot[want.slot] or 0) + 1
+                            wait = math.min(10 * 2 ^ (noSpot[want.slot] - 1), 120)
+                        end
+                        slotBlock[want.slot] = os.clock() + (reason == "cap" and 2 or (tostring(reason):find("Unique") and 120 or wait)) -- "Unique units may not be placed with others of its kind": the unit is still around (fused), retrying every 10 s only fills the log
                         logLine(("slot %d %s blocked: %s"):format(want.slot, want.h.id, tostring(reason)))
                     end
                     return

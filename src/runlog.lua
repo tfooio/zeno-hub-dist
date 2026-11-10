@@ -21,6 +21,14 @@ local function plain(v, depth)
     return out
 end
 
+-- new_units holds unit uuids; keep the matching unit ids beside them so the log and the webhook can name the unit.
+local function unit_ids(list)
+    if type(list) ~= "table" then return nil end
+    local out = {}
+    for _, uuid in list do out[#out + 1] = type(uuid) == "string" and Game.unit_id(uuid) or false end
+    return out
+end
+
 function RunLog.record(result)
     local stats = result.stats or {}
     local ok, ld = pcall(function() return Game.loader().LevelData end)
@@ -46,6 +54,7 @@ function RunLog.record(result)
         xp = result.xp_reward,
         resources = plain(result.resource_reward, 0),
         new_units = plain(result.new_units, 0),
+        new_unit_ids = unit_ids(result.new_units),
         new_items = plain(result.new_items, 0),
         first_completion = result.first_completion,
     }

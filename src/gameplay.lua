@@ -179,7 +179,10 @@ local function boostFps(on)
         for _, e in Lighting:GetChildren() do
             if e:IsA("PostEffect") then setProp(e, "Enabled", false) end
         end
-        for _, d in workspace:GetDescendants() do pcall(boostOne, d) end
+        for i, d in workspace:GetDescendants() do
+            pcall(boostOne, d)
+            if i % 2000 == 0 then task.wait() end -- one pass with no pause froze the game (the lobby alone has 64,000 instances)
+        end
         boostConn = workspace.DescendantAdded:Connect(function(d) task.defer(pcall, boostOne, d) end)
         table.insert(Hub.connections, boostConn)
     else
@@ -280,12 +283,14 @@ if Tabs then
     place:AddToggle("PlaceAnywhere", { Text = "Place Anywhere", Tooltip = "Click-place units on the road and on top of other units. A click inside a copy of the same unit is moved 0.85 studs aside (the server refuses closer). Unit cap and money still apply.", Default = cfg.place_anywhere, Callback = set(cfg, "place_anywhere") })
 end
 -- Apply saved choices after a teleport (toggle callbacks do not fire for their Default).
-if cfg.delete_map then whenMapReady(function() if cfg.delete_map then deleteMap(true) end end) end
+-- Performance Mode already does what Delete Map and Boost FPS do (it destroys the decor and sets plain materials), so with it on the other two are not
+-- run at match start: all three on meant two more passes over the whole map about 3 s after loading and two handlers per new instance all match.
+if cfg.delete_map and not cfg.performance_mode then whenMapReady(function() if cfg.delete_map then deleteMap(true) end end) end
 if cfg.performance_mode then omega(true) end
-if cfg.boost_fps or cfg.black_screen then
+if (cfg.boost_fps and not cfg.performance_mode) or cfg.black_screen then
     task.spawn(function()
         if not waitLoaded() then return end
-        if cfg.boost_fps then boostFps(true) end
+        if cfg.boost_fps and not cfg.performance_mode then boostFps(true) end
         if cfg.black_screen then blackScreen(true) end
     end)
 end
@@ -369,7 +374,13 @@ end
 -- Auto Modifier: show_roguelike_options carries the options ({[slot] = {title, effects}}); the game's own
 -- Confirm button sends select_roguelike_option(slot). Every offer is logged for checking the format.
 local picked = {} -- card -> picks this run
+-- A seamless replay keeps the hub loaded, so "this run" has to end with the match (the caps turned into permanent blocks after a few replays).
+table.insert(Hub.connections, { Disconnect = Core.on("game_finished", function() table.clear(picked) end) })
+-- Titles already in Data/roguelike_cards.jsonl: the list used to start empty at every match, so 292 cards became 4,740 lines.
 local cardTextSeen = {}
+pcall(function()
+    for title in readfile(Core.paths.data .. "/roguelike_cards.jsonl"):gmatch('"title":"(.-)"') do cardTextSeen[title] = true end
+end)
 local function cardOf(title) return (tostring(title or ""):gsub("^%+%s*", ""):match("^%s*(.-)%s*$")) end
 table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.server_to_client:WaitForChild("show_roguelike_options").OnClientEvent:Connect(function(...)
     local args, options = table.pack(...), nil
@@ -409,7 +420,7 @@ table.insert(Hub.connections, game:GetService("ReplicatedStorage").endpoints.ser
     local best, bestRank
     for slot, v in options do
         local c = cardOf(v.title)
-        local cap = cfg.modifier.cap[c] or 0
+        local cap = pilot and 0 or (cfg.modifier.cap[c] or 0) -- the Hunt autopilot has its own caps; a Game-tab cap would hide a card (a Star card too) from it
         local rank = (cap > 0 and (picked[c] or 0) >= cap) and math.huge or (cfg.modifier.rank[c] or 1000)
         local pilotRank = rank ~= math.huge and Hub.Summer and Hub.Summer.cardRank(c, v) -- Summer autopilot: its own card order
         if pilotRank then rank = pilotRank end

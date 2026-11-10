@@ -4,9 +4,27 @@ local Core, Game = Hub.Core, Hub.Game
 
 -- shortcut: tracks Obsidian main, pin a commit if an update breaks the UI.
 local REPO = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local Library = loadstring(game:HttpGet(REPO .. "Library.lua"))()
-local SaveManager = loadstring(game:HttpGet(REPO .. "addons/SaveManager.lua"))()
-local okTM, ThemeManager = pcall(function() return loadstring(game:HttpGet(REPO .. "addons/ThemeManager.lua"))() end)
+-- Three tries, then the copy saved by the first good fetch (Zeno Hub/Cache): a network blip or a GitHub outage used to mean no UI
+-- (3 failed loads in the logs: 2026-10-23, 10-31, 11-01). shortcut: the copy is written once and not refreshed; delete the Cache folder to renew it.
+local CACHE = Core.paths.root .. "/Cache"
+if not isfolder(CACHE) then makefolder(CACHE) end
+local function fetch(file) -- returns the compiled chunk
+    local cache = CACHE .. "/obsidian_" .. (file:gsub("/", "_"))
+    for try = 1, 3 do
+        local ok, src = pcall(game.HttpGet, game, REPO .. file)
+        local fn = ok and type(src) == "string" and loadstring(src)
+        if fn then
+            if not isfile(cache) then pcall(writefile, cache, src) end
+            return fn
+        end
+        if try < 3 then task.wait(try * 2) end
+    end
+    Core.log("ui: could not fetch", file, isfile(cache) and "(using the saved copy)" or "(no saved copy)")
+    return assert(loadstring(readfile(cache)))
+end
+local Library = fetch("Library.lua")()
+local SaveManager = fetch("addons/SaveManager.lua")()
+local okTM, ThemeManager = pcall(function() return fetch("addons/ThemeManager.lua")() end)
 
 -- Soft dark + pink look. A theme the user saved as default (Settings > Themes) still overrides these.
 Library.Scheme.BackgroundColor = Color3.fromRGB(16, 16, 24)

@@ -462,11 +462,13 @@ local function redeemCodes()
 end
 
 -- Loops ---------------------------------------------------------------------------------------------------
-local function every(name, sec, enabled, fn)
+-- The game's profile is not readable for a few seconds after a teleport (logs 2026-11-06 to 11-09: hundreds of "attempt to index nil with 'profile_data'"
+-- from claim / stars / summon), so every job that needs it waits until Game.profile() reads. noProfile = a job that does not (zoom).
+local function every(name, sec, enabled, fn, noProfile)
     task.spawn(function()
         task.wait(5)
         while alive() do
-            if enabled() then
+            if enabled() and (noProfile or Game.profile()) then
                 local ok, err = xpcall(fn, debug.traceback)
                 if not ok then Core.log("ERROR lobby", name, err) end
             end
@@ -480,7 +482,7 @@ if LOBBY then
     every("gambler", 30, function() return cfg.gambler.enable end, function() gambler() Core.save_config() end)
     every("stars", 15, function() return cfg.stars.enable end, stars)
     every("summon", 20, function() return cfg.special.enable or cfg.legacy.enable or cfg.event.enable end, summon)
-    every("zoom", 5, function() return cfg.zoom end, function() LP.CameraMaxZoomDistance = cfg.zoom end)
+    every("zoom", 5, function() return cfg.zoom end, function() LP.CameraMaxZoomDistance = cfg.zoom end, true)
     if cfg.codes.enable then task.spawn(function() task.wait(8) pcall(redeemCodes) end) end
 end
 

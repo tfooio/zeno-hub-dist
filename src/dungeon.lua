@@ -472,7 +472,9 @@ if isDungeon then
         local over = data()
         over = over and not over._started and not over._dead
         if over then Core.log("dungeon: run finished") end
-        if alive() and ((Core.config.auto and Core.config.auto.lobby) or over) then
+        -- Still here = no room was entered. The lobby is where the joiner continues the run (same next_room), so always go back (user, 2026-11-09);
+        -- before, a run that was not over stayed on the end screen for good unless Auto Return Lobby was on.
+        if alive() then
             Core.log("dungeon: back to lobby")
             Core.save_config()
             pcall(Game.invoke, "teleport_back_to_lobby")

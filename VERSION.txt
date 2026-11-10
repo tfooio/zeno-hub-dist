@@ -1,2 +1,2 @@
-464e1bd 2026-11-09
-Summer: Always Take Star Cards toggle (Star Remnant reward cards and Wishing Star first, over presets and caps)
+8a19174 2026-11-10
+Webhook: new embed layout, balances, custom currency icons, unit names

@@ -86,6 +86,19 @@ function Game.profile()
     return ok and svc and svc.session and svc.session.profile_data or nil
 end
 
+-- unit_id of an owned unit by uuid (what the end screen does with result.new_units). Lobby profile first; in a match the
+-- unit service holds the same collection. nil when the unit is not (or no longer) in the collection.
+function Game.unit_id(uuid)
+    local pd = Game.profile()
+    if not pd then
+        local ok, svc = pcall(Game.loader().load_client_service, script, "UnitServiceClient")
+        pd = ok and svc and svc.session and svc.session.profile_data or nil
+    end
+    local owned = pd and pd.collection and pd.collection.owned_units
+    local u = type(owned) == "table" and owned[uuid]
+    return type(u) == "table" and u.unit_id or nil
+end
+
 function Game.remote(name)
     -- Endpoints replicate a moment after the match place loads.
     return RS:WaitForChild("endpoints"):WaitForChild("client_to_server"):WaitForChild(name, 30)

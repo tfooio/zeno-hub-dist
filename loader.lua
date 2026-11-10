@@ -5,6 +5,13 @@ local LOBBY_PLACE = 8304191830
 -- Autoexec and the queue_on_teleport copy both start this file after a teleport; the second start is dropped.
 -- shortcut: a manual re-run within 20 s of boot is ignored too; Hub.reload clears the stamp.
 local env = getgenv()
+-- Boot trace, one line per start (Logs/boot_trace.log). After about 2.5% of teleports the hub log shows no "loaded" line for 2 to 155 min: a start here
+-- without a "loaded" there = the loader stopped early; no start here either = the executor or the autoexec never ran it.
+pcall(function()
+    local path = "Zeno Hub/Logs/boot_trace.log"
+    local line = ("%s start place %s loaded %s\n"):format(os.date("%Y-%m-%d %H:%M:%S"), tostring(game.PlaceId), tostring(game:IsLoaded()))
+    if isfile(path) then appendfile(path, line) else writefile(path, line) end
+end)
 if env.ZenoHubBoot and os.time() - env.ZenoHubBoot < 20 then return end
 env.ZenoHubBoot = os.time()
 -- Failsafe for Roblox's own loading hanging: no module would ever run, so this one lives here (fixed 60 s,
@@ -79,8 +86,12 @@ end
 Hub.version = version
 Hub.Core.log("loaded", Hub.mode, "place", game.PlaceId, DEV and "dev" or "hosted", version)
 
-local ok, err = pcall(function() Hub.UI = Hub.require("ui") end)
-if not ok then Hub.Core.log("ERROR ui:", err) end
+-- No UI = safe mode: every module still starts its loops (each one checks Hub.UI). getgenv().ZenoNoUI = true before running tests that path.
+local ok, err = pcall(function()
+    if env.ZenoNoUI then error("ZenoNoUI is set") end
+    Hub.UI = Hub.require("ui")
+end)
+if not ok then Hub.Core.log("ERROR ui:", err, "| running without a window (safe mode)") end
 
 ok, err = pcall(function() Hub.UIKit = Hub.require("uikit") end)
 if not ok then Hub.Core.log("ERROR uikit:", err) end

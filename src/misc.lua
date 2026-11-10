@@ -20,9 +20,13 @@ for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 local function alive() return env.ZenoHub == Hub end
 local Misc = {}
 
+-- Safe mode: when the UI library did not load, this file used to stop here, before the rejoin, the error-prompt rejoin and the ping-freeze check
+-- (so a UI failure also removed every recovery path, and the watchdog's Hub.Misc.rejoin was nil). Without a UI every Add* call below lands on a
+-- stub that swallows it, and the code in between still runs.
 local UI = Hub.UI
-if not UI then return Misc end
-local Library, Tabs = UI.Library, UI.Tabs
+local stub
+stub = setmetatable({}, { __index = function() return stub end, __call = function() return stub end })
+local Library, Tabs = UI and UI.Library or stub, UI and UI.Tabs or stub
 local function set(key) return function(v) cfg[key] = v Core.save_config() end end
 local function notify(text) pcall(Library.Notify, Library, { Title = "Zeno Hub", Description = text, Time = 5 }) end
 
@@ -206,7 +210,7 @@ function Misc.reset() task.defer(swap, {}) end
 cfgBox:AddButton({ Text = "Reset Script Config", Tooltip = "Back to defaults (a backup is kept in hub.backup.json) and reload the hub. Your webhook URL stays.", DoubleClick = true, Func = Misc.reset })
 
 -- Settings > Themes (Obsidian ThemeManager: presets, color editor, save / set as default)
-local TM = UI.ThemeManager
+local TM = UI and UI.ThemeManager
 if TM then
     local ok, err = pcall(function()
         TM:SetLibrary(Library)

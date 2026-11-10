@@ -24,15 +24,28 @@ function Core.log(...)
     local parts = table.pack(...)
     for i = 1, parts.n do parts[i] = tostring(parts[i]) end
     local line = ("[%s] [%s] %s\n"):format(os.date("%H:%M:%S"), Hub.mode, table.concat(parts, " ", 1, parts.n))
-    if not pcall(appendfile, logFile, line) then pcall(writefile, logFile, line) end
+    -- appendfile errors on a missing file; writefile only then (as a fallback for any failure it would replace the whole day's log with one line)
+    if not pcall(appendfile, logFile, line) and not isfile(logFile) then pcall(writefile, logFile, line) end
 end
 
 -- Config: hub state that is not a UI option (UI options go through Obsidian's SaveManager).
 local configFile = Core.paths.config .. "/hub.json"
 Core.config = {}
+-- A hub.json that does not parse (a crash in the middle of a write) used to be replaced by defaults on the same boot: every setting gone.
+-- Each good boot keeps a copy (hub.last-good.json); a bad file is kept as hub.corrupt-<time>.json and the copy is loaded instead.
+local lastGood = Core.paths.config .. "/hub.last-good.json"
 if isfile(configFile) then
-    local ok, data = pcall(HttpService.JSONDecode, HttpService, readfile(configFile))
-    if ok and type(data) == "table" then Core.config = data else Core.log("config unreadable, starting empty") end
+    local raw = readfile(configFile)
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, raw)
+    if ok and type(data) == "table" then
+        Core.config = data
+        pcall(writefile, lastGood, raw)
+    else
+        pcall(writefile, ("%s/hub.corrupt-%d.json"):format(Core.paths.config, os.time()), raw)
+        local gok, good = pcall(function() return HttpService:JSONDecode(readfile(lastGood)) end)
+        if gok and type(good) == "table" then Core.config = good end
+        Core.log("config unreadable, kept as hub.corrupt-*.json;", gok and type(good) == "table" and "loaded hub.last-good.json" or "no good copy, starting empty")
+    end
 end
 function Core.save_config()
     local ok, err = pcall(function() writefile(configFile, HttpService:JSONEncode(Core.config)) end)
