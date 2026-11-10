@@ -1,2 +1,2 @@
-8a19174 2026-11-10
-Webhook: new embed layout, balances, custom currency icons, unit names
+b0937ba 2026-11-10
+Webhook: Star Remnant icon (shared by the Limited line), export override item icons

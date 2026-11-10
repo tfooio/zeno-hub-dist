@@ -140,7 +140,9 @@ local function commas(n) return (tostring(math.floor(n)):reverse():gsub("(%d%d%d
 local function totalOf(id) return TRACK[id] and totals[id] and (" · %s total"):format(commas(totals[id])) or "" end
 
 -- Custom emoji for currencies: cfg.emoji["gems"] = "<:zh_gems:123...>" (pasted from Discord, see the Webhook tab).
+local ICON_ALIAS = { star_remnant_limited = "star_remnant" } -- the game uses one icon for both
 local function icon(key)
+    key = ICON_ALIAS[key] or key
     local e = cfg.emoji[tostring(key):lower()]
     return e and (e .. " ") or ""
 end

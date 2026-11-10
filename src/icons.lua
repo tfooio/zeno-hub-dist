@@ -89,22 +89,29 @@ end
 -- Returns the emoji names written and a list of problems.
 function Icons.export()
     if not isfolder(DIR) then makefolder(DIR) end
-    local folder = Game.loader().get_assets_path().gui._Resource
+    local assets = Game.loader().get_assets_path()
     local AssetService = game:GetService("AssetService")
     local done, failed = {}, {}
-    for _, res in folder:GetChildren() do
-        local icon = res:FindFirstChild("Icon")
-        local name = "zh_" .. (res.Name == "_Trait" and "trait" or res.Name:lower())
-        -- the other "_" resources (battle pass, event tokens) are not shown in embeds
-        if (res.Name:sub(1, 1) == "_" and res.Name ~= "_Trait") or res.Name == "TestResource" or not icon then continue end
+    local function save(name, image)
         local ok, err = pcall(function()
-            local img = AssetService:CreateEditableImageAsync(Content.fromUri(icon.Image))
+            local img = AssetService:CreateEditableImageAsync(Content.fromUri(image))
             local px = img:ReadPixelsBuffer(Vector2.zero, img.Size)
             local sq, side = square(px, img.Size.X, img.Size.Y)
             img:Destroy()
             writefile(("%s/%s.png"):format(DIR, name), Icons.png(downscale(sq, side, SIZE), SIZE))
         end)
         if ok then done[#done + 1] = name else failed[#failed + 1] = name .. ": " .. tostring(err) end
+    end
+    for _, res in assets.gui._Resource:GetChildren() do
+        local icon = res:FindFirstChild("Icon")
+        -- the other "_" resources (battle pass, event tokens) are not shown in embeds
+        if (res.Name:sub(1, 1) == "_" and res.Name ~= "_Trait") or res.Name == "TestResource" or not icon then continue end
+        save("zh_" .. (res.Name == "_Trait" and "trait" or res.Name:lower()), icon.Image)
+    end
+    -- Items drawn as 3D models have no flat image, except those with an override icon (gui._OverrideItemIcons.<id>).
+    for _, id in { "star_remnant" } do -- the Limited one points at the same icon
+        local o = assets.gui._OverrideItemIcons:FindFirstChild(id)
+        if o then save("zh_" .. id, o.Image) end
     end
     return done, failed, DIR
 end
