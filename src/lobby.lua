@@ -464,12 +464,33 @@ end
 -- Loops ---------------------------------------------------------------------------------------------------
 -- The game's profile is not readable for a few seconds after a teleport (logs 2026-11-06 to 11-09: hundreds of "attempt to index nil with 'profile_data'"
 -- from claim / stars / summon), so every job that needs it waits until Game.profile() reads. noProfile = a job that does not (zoom).
+-- The joiners and the Summer Hunt wait for these jobs (Lobby.hold): a job is busy while it runs and until it has made one pass this visit.
+local jobs = {}
+local function busy()
+    for name, j in jobs do
+        if j.enabled() and (j.running or not j.passed) then return name end
+    end
+end
+-- true = a lobby job (summon, shop, stars, claim, Summer banner / merchant) is still working, so a join should wait.
+-- shortcut: gives up after 30 minutes so a stuck job cannot hold the joiners for good.
+local WAIT_CAP, waitSince = 1800, nil
+function Lobby.hold()
+    local why = busy()
+    if not why and Hub.Summer and Hub.Summer.busy then why = Hub.Summer.busy() end
+    if not why then waitSince = nil return false end
+    if not waitSince then waitSince = os.clock() Core.log("lobby: joins wait for", why) end
+    return os.clock() - waitSince < WAIT_CAP
+end
 local function every(name, sec, enabled, fn, noProfile)
+    local j = { enabled = enabled }
+    if not noProfile then jobs[name] = j end
     task.spawn(function()
         task.wait(5)
         while alive() do
             if enabled() and (noProfile or Game.profile()) then
+                j.running = true
                 local ok, err = xpcall(fn, debug.traceback)
+                j.running, j.passed = false, true
                 if not ok then Core.log("ERROR lobby", name, err) end
             end
             task.wait(sec)

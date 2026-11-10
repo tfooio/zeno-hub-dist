@@ -17,7 +17,7 @@ local SNAP = 6 -- studs: a click takes the nearest valid cell within this
 local N = 80 -- plot resolution: cells are merged into an N x N grid so a big map stays a few thousand frames
 local DIR = Core.paths.data .. "/autoplay_maps"
 local COLORS = { Color3.fromRGB(255, 90, 90), Color3.fromRGB(255, 170, 60), Color3.fromRGB(240, 230, 70), Color3.fromRGB(90, 220, 110), Color3.fromRGB(80, 170, 255), Color3.fromRGB(190, 110, 255) }
-local GROUND, HILL, ROUTE = Color3.fromRGB(70, 112, 96), Color3.fromRGB(150, 118, 72), Color3.fromRGB(235, 235, 245)
+local GROUND, HILL, ROUTE, BLOCKED = Color3.fromRGB(70, 112, 96), Color3.fromRGB(150, 118, 72), Color3.fromRGB(235, 235, 245), Color3.fromRGB(104, 82, 132)
 
 local function new(class, props, parent)
     local o = Instance.new(class)
@@ -60,11 +60,12 @@ local function loadMap(id)
     local function grow(x, z) x0, x1, z0, z1 = math.min(x0, x), math.max(x1, x), math.min(z0, z), math.max(z1, z) end
     for _, l in d.lanes do for _, p in l do grow(p[1], p[2]) end end
     for _, c in d.cells do grow(c[1], c[2]) end
+    for _, c in d.blocked or {} do grow(c[1], c[2]) end
     if x0 == math.huge then return nil end
     local side = math.max(x1 - x0, z1 - z0, 20)
     side += math.max(side * 0.04, 4)
     local step = d.step or 2
-    local m = { id = id, key = tostring(d.map or id), step = step, lanes = d.lanes, cells = d.cells, side = side, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, hash = {} }
+    local m = { id = id, key = tostring(d.map or id), step = step, lanes = d.lanes, cells = d.cells, blocked = d.blocked or {}, v = d.v or 1, scan = d.scan, side = side, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, hash = {} }
     for _, c in d.cells do m.hash[math.floor(c[1] / step + 0.5) * 100003 + math.floor(c[2] / step + 0.5)] = c end
     return m
 end
@@ -109,6 +110,11 @@ local function paintStatus()
         text = ("%s | Slot %d %s: %d spot%s | all units on this map: %d"):format(label(map.id), sel, name or "", count(sel), count(sel) == 1 and "" or "s", total)
     else
         text = ("%s | Slot %d is empty | all units on this map: %d"):format(label(map.id), sel, total)
+    end
+    if map.v < 2 then
+        text ..= " | old scan (28 studs around the route, no details): play this map, or press Rescan in a match on it"
+    elseif map.scan then
+        text ..= (" | scan: %d placeable, %d under scenery, %d no ground"):format(map.scan.ground + map.scan.hill, map.scan.scenery, map.scan.none)
     end
     if cfg.use_learned == false then text ..= " | Use Map Picker Spots is OFF (Advanced > Position)" end
     ui.status:SetText(text)
@@ -176,7 +182,18 @@ local function build()
         local k = gx * N + gz
         if grid[k] == nil or (grid[k] == "H" and c[3] == "G") then grid[k] = c[3] end -- ground wins a mixed bucket (most units stand on it)
     end
+    local blocked = {}
+    for _, c in map.blocked do
+        local gx = math.clamp(math.floor((0.5 + (c[1] - map.cx) / map.side) * N), 0, N - 1)
+        local gz = math.clamp(math.floor((0.5 + (c[2] - map.cz) / map.side) * N), 0, N - 1)
+        local k = gx * N + gz
+        if grid[k] == nil then blocked[k] = true end -- a bucket with any placeable cell stays green
+    end
     local cellHolder = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
+    for k in blocked do
+        new("Frame", { Position = UDim2.fromScale((k // N) / N, (k % N) / N), Size = UDim2.fromScale(1 / N, 1 / N), BackgroundColor3 = BLOCKED,
+            BackgroundTransparency = 0.45, BorderSizePixel = 0 }, cellHolder)
+    end
     for k, cls in grid do
         new("Frame", { Position = UDim2.fromScale((k // N) / N, (k % N) / N), Size = UDim2.fromScale(1 / N, 1 / N), BackgroundColor3 = cls == "H" and HILL or GROUND,
             BackgroundTransparency = 0.2, BorderSizePixel = 0 }, cellHolder)
@@ -295,6 +312,7 @@ hit.InputBegan:Connect(function(input)
 end)
 box:AddUIPassthrough("MP_Plot", { Instance = holder, Height = 340 })
 ui.status = box:AddLabel("-", true)
+box:AddLabel("Colours: green = ground any unit can stand on (the game's own placement rule), brown = hill ground (hill units), purple = ground hidden under scenery (not usable), dark = nothing placeable found, or outside the scan (48 studs around the route). White dots = the enemy route, S = spawn, B = your base.", true)
 
 box:AddButton({ Text = "Undo Last Spot (this unit)", Func = function()
     local list = spotsOf(unitOf(sel))
@@ -306,6 +324,18 @@ box:AddButton({ Text = "Clear This Unit's Spots", Func = function()
 end })
 box:AddButton({ Text = "Clear Whole Map (every unit) (double-click)", Risky = true, DoubleClick = true, Func = function()
     if map then cfg.learned[map.key] = nil Core.save_config() refresh() end
+end })
+box:AddButton({ Text = "Rescan This Map (needs a match on it)", Tooltip = "Scans the map you are playing again, wider than the first scans, and records why a nearby spot is not placeable.", Func = function()
+    local ap = Hub.AutoPlay
+    local ok, cur = pcall(function() return ap and ap.mapKey and ap.mapKey() end)
+    if not (map and ap and ap.rescan and ok and cur == map.key) then return lib:Notify("Join a match on this map first, then press this again") end
+    local done, res = pcall(ap.rescan)
+    if done and res then
+        lib:Notify("Rescanned " .. map.key)
+        select(map.id)
+    else
+        lib:Notify("Could not rescan yet (the route is not loaded), try again in a few seconds")
+    end
 end })
 box:AddButton({ Text = "Refresh Map List", Tooltip = "Picks up maps saved since the hub started.", Func = function()
     scan()

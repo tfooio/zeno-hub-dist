@@ -1,2 +1,2 @@
-cbe5cb0 2026-11-10
-UI text pass: clearer labels, red double-click buttons, shorter notes, webhook tooltips
+dc96a6b 2026-11-10
+Map Picker: colour legend, scan details, Rescan; snapshot v2

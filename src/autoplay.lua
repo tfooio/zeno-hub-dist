@@ -1359,34 +1359,65 @@ end
 local dayLog = Core.paths.logs
 function logLine(text) Core.log("autoplay " .. text) end
 
--- Per-map snapshot for the offline sim (tools/autoplay-sim): lane samples and valid cells near the route.
-local function snapshot()
+-- Per-map snapshot for the offline sim (tools/autoplay-sim) and the Map Picker: lane samples, valid cells near the route (`cells`, the cell() rule: the first thing
+-- a ray from above hits inside _terrain is ground or hill), and, since v2 (2026-11-10), why a nearby cell is NOT valid: `blocked` = ground exists below something
+-- else (scenery), `scan` = the counts, `hill_folder` = whether the map has _terrain.hill (the game lets hill / hybrid units stand anywhere when it has not).
+-- v1 scanned 28 studs around the route, v2 scans 48; a file without the v2 marker is written again the next time the map is played.
+local SNAP_V = '{"v":2,'
+local function snapshot(force)
     local dir = Core.paths.data .. "/autoplay_maps"
     if not isfolder(dir) then makefolder(dir) end
     local path = ("%s/%s.json"):format(dir, (mapKey():gsub("%W", "_")))
-    if isfile(path) then return end
-    local lanesOut, cellsOut = {}, {}
+    if not force and isfile(path) and readfile(path):sub(1, #SNAP_V) == SNAP_V then return end
+    local rpGround = RaycastParams.new()
+    rpGround.FilterType = Enum.RaycastFilterType.Include
+    local solid = { T.ground }
+    if T:FindFirstChild("hill") then table.insert(solid, T.hill) end
+    rpGround.FilterDescendantsInstances = solid
+    local lanesOut, cellsOut, blockedOut = {}, {}, {}
+    local stats = { ground = 0, hill = 0, scenery = 0, none = 0 }
+    local seen, n = {}, 0
     for _, l in lanes do
         local pts = {}
         for i = 1, #l.samples, 2 do table.insert(pts, { math.floor(l.samples[i].p.X), math.floor(l.samples[i].p.Z) }) end
         table.insert(lanesOut, pts)
-        local seen = {}
         for i = 1, #l.samples, 6 do
             local c = l.samples[i].p
             local cx, cz = math.floor(c.X / STEP + 0.5), math.floor(c.Z / STEP + 0.5)
-            for ix = cx - 14, cx + 14 do
-                for iz = cz - 14, cz + 14 do
+            for ix = cx - 24, cx + 24 do
+                for iz = cz - 24, cz + 24 do
                     local k = ix * 100003 + iz
                     if not seen[k] then
                         seen[k] = true
+                        n += 1
+                        if n % 2500 == 0 then task.wait() end
                         local cl = cell(ix, iz, c.Y)
-                        if cl then table.insert(cellsOut, { ix * STEP, iz * STEP, cl.cls }) end
+                        if cl then
+                            table.insert(cellsOut, { ix * STEP, iz * STEP, cl.cls })
+                            stats[cl.cls == "H" and "hill" or "ground"] += 1
+                        else
+                            local r = workspace:Raycast(Vector3.new(ix * STEP, c.Y + 80, iz * STEP), Vector3.new(0, -400, 0), rpGround)
+                            if r and r.Instance.Name ~= "_donotplace" then
+                                table.insert(blockedOut, { ix * STEP, iz * STEP })
+                                stats.scenery += 1
+                            else
+                                stats.none += 1
+                            end
+                        end
                     end
                 end
             end
         end
     end
-    pcall(writefile, path, HttpService:JSONEncode({ map = mapKey(), step = STEP, lanes = lanesOut, cells = cellsOut }))
+    local body = HttpService:JSONEncode({ map = mapKey(), step = STEP, hill_folder = T:FindFirstChild("hill") ~= nil, scan = stats, lanes = lanesOut, cells = cellsOut, blocked = blockedOut })
+    pcall(writefile, path, SNAP_V .. body:sub(2)) -- the marker goes first so the next start can tell the version without decoding the file
+end
+-- Map Picker > Rescan This Map: scan the map you are in again.
+function AutoPlay.rescan()
+    if #lanes == 0 then lanes = loadLanes() end
+    if #lanes == 0 then return false end
+    snapshot(true)
+    return true
 end
 
 local planFolder

@@ -340,6 +340,7 @@ local function hunt()
         if os.clock() - (Summer.idleLogged or 0) > 60 then Summer.idleLogged = os.clock() Core.log("summer: not joining,", why) end
     end
     if not pcall(profile) then return idle("profile not readable yet") end
+    if Hub.Lobby and Hub.Lobby.hold and Hub.Lobby.hold() then return idle("lobby jobs still running (summons, shops)") end
     local w = Summer.weather()
     if not w then return idle("no weather on the Hunt pad") end
     if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
@@ -456,15 +457,30 @@ local function summonBanner()
         end
     end
 end
+-- Lobby jobs the joiners and the Hunt wait for (Lobby.hold calls Summer.busy): busy while one runs and until it has made one pass this visit.
+local lobbyJobs = {
+    banner = { enabled = function() return cfg.shop.enable end },
+    merchant = { enabled = function() return cfg.merchant.enable end },
+    bingo = { enabled = function() return cfg.bingo.enable end },
+}
+function Summer.busy()
+    for name, j in lobbyJobs do
+        if j.enabled() and (j.running or not j.passed) then return "summer " .. name end
+    end
+end
+local function pass(name, fn)
+    local j = lobbyJobs[name]
+    j.running = true
+    local ok, err = pcall(function()
+        if Hub.Lobby and Hub.Lobby.quietly then Hub.Lobby.quietly(fn) else fn() end
+    end)
+    j.running, j.passed = false, true
+    if not ok then Core.log("ERROR summer", name, err) end
+end
 if LOBBY then
     task.spawn(function()
         while alive() do
-            if cfg.shop.enable then
-                local ok, err = pcall(function()
-                    if Hub.Lobby and Hub.Lobby.quietly then Hub.Lobby.quietly(summonBanner) else summonBanner() end
-                end)
-                if not ok then Core.log("ERROR summer banner", err) end
-            end
+            if cfg.shop.enable then pass("banner", summonBanner) end
             task.wait(20)
         end
     end)
@@ -544,12 +560,7 @@ if LOBBY then
         task.wait(10)
         while alive() do
             for key, fn in { merchant = merchant, bingo = bingo } do
-                if cfg[key].enable and ready() then
-                    local ok, err = pcall(function()
-                        if Hub.Lobby and Hub.Lobby.quietly then Hub.Lobby.quietly(fn) else fn() end
-                    end)
-                    if not ok then Core.log("ERROR summer", key, err) end
-                end
+                if cfg[key].enable and ready() then pass(key, fn) end
             end
             task.wait(30)
         end

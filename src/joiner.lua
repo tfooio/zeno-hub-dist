@@ -403,7 +403,9 @@ if Hub.mode == "lobby" then
     task.spawn(function()
         task.wait(cfg.cooldown)
         while alive() do
-            for _, mode in order() do
+            -- Summons, shops, stars and claims finish first (Lobby.hold), so a join does not cut a summon short.
+            local hold = Hub.Lobby and Hub.Lobby.hold and Hub.Lobby.hold()
+            for _, mode in (hold and {} or order()) do
                 -- Party farming, Follow Host: this account joins the host's pad instead of making its own.
                 if Hub.Party and Hub.Party.following() then break end
                 if cfg[mode].enable and (backoff[mode] or 0) < os.clock() then
