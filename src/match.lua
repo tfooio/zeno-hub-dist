@@ -9,7 +9,7 @@ local env = getgenv()
 local cfg = Core.config.auto or {}
 Core.config.auto = cfg
 cfg.finish = nil -- replaced by the next/replay/lobby toggles
-local defaults = { vote_start = false, wave_skip = false, skip_stop = 0, skip_types = {}, next = false, replay = false, lobby = false, finish_delay = 3, anti_afk = true, load_failsafe = true, load_timeout = 60 }
+local defaults = { vote_start = false, wave_skip = false, skip_stop = 0, skip_types = {}, next = false, replay = false, lobby = false, finish_delay = 3, anti_afk = true, load_failsafe = true, load_timeout = 60, vote_lose = false, lose_hp = 30, lose_wave = 1 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
 local function alive() return env.ZenoHub == Hub end
@@ -27,6 +27,12 @@ if Tabs then
     local function set(key) return function(v) cfg[key] = v Core.save_config() end end
     local play = Tabs.Game:AddLeftGroupbox("Gameplay", "gamepad-2")
     play:AddToggle("AutoVoteStart", { Text = "Auto Vote Start", Default = cfg.vote_start, Callback = set("vote_start") })
+    local loseHp, loseWave
+    local function showLose(on) if loseHp then loseHp:SetVisible(on) loseWave:SetVisible(on) end end
+    play:AddToggle("AutoVoteLose", { Text = "Auto Vote to Lose", Tooltip = "Ends a match that is clearly lost: votes to lose once the base HP is under the limit and still dropping. Never in dungeons (a lost room costs a life).", Default = cfg.vote_lose, Callback = function(v) cfg.vote_lose = v Core.save_config() showLose(v) end })
+    loseHp = play:AddSlider("LoseHp", { Text = "Vote when Base HP under (%)", Default = cfg.lose_hp, Min = 5, Max = 80, Rounding = 0, Callback = set("lose_hp") })
+    loseWave = play:AddSlider("LoseWave", { Text = "Not before Wave", Default = cfg.lose_wave, Min = 1, Max = 100, Rounding = 0, Callback = set("lose_wave") })
+    showLose(cfg.vote_lose)
     local skip = Tabs.Game:AddLeftGroupbox("Auto Skip Wave", "fast-forward")
     skip:AddToggle("AutoWaveSkip", { Text = "Auto Skip Wave", Tooltip = "Turns on the game's own Auto Skip Wave setting and votes skip.", Default = cfg.wave_skip, Callback = set("wave_skip") })
     skip:AddSlider("AutoSkipStop", { Text = "Stop Skip at Wave", Tooltip = "Turn Auto Skip off from this wave on. 0 = never stop. Only in the stage types below.", Default = cfg.skip_stop, Min = 0, Max = 100, Rounding = 0, Callback = set("skip_stop") })
@@ -213,6 +219,37 @@ task.spawn(function()
     while alive() and vf do
         if (cfg.vote_start or forced()) and not vf.Value then pcall(Game.invoke, "vote_start") end
         task.wait(2)
+    end
+end)
+
+-- Auto Vote to Lose (competitor parity, 2026-11-10): vote_lose_game(true) is what the game's own "Vote to Lose" button sends.
+-- shortcut: the base HP dropping inside the last 10 s stands in for "enemies near the end"; add a lane-progress check if it votes too early.
+local function baseHp()
+    local fake = workspace:FindFirstChild("_BASES")
+    fake = fake and fake:FindFirstChild("player")
+    fake = fake and fake:FindFirstChild("base")
+    fake = fake and fake:FindFirstChild("fake_unit")
+    local hum = fake and fake:FindFirstChildOfClass("Humanoid")
+    if hum and hum.MaxHealth > 0 then return hum.Health / hum.MaxHealth * 100 end
+end
+task.spawn(function()
+    local data = workspace:WaitForChild("_DATA", 30)
+    local started, finished = data and data:WaitForChild("GameStarted", 10), data and data:WaitForChild("GameFinished", 10)
+    local samples, lastVote = {}, -math.huge
+    while alive() and started and finished do
+        task.wait(1)
+        local hp = baseHp()
+        if not hp then continue end
+        local now = os.clock()
+        table.insert(samples, { now, hp })
+        while now - samples[1][1] > 10 do table.remove(samples, 1) end
+        if cfg.vote_lose and not Game.loader().LevelData._dungeon and started.Value and not finished.Value
+            and hp > 0 and hp < cfg.lose_hp and workspace._wave_num.Value >= cfg.lose_wave
+            and samples[1][2] > hp and now - lastVote > 30 then
+            lastVote = now
+            Core.log("vote to lose: base", math.floor(hp), "% wave", workspace._wave_num.Value)
+            call("vote_lose_game", true)
+        end
     end
 end)
 

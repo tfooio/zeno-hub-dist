@@ -24,6 +24,10 @@ cfg.delete_map, cfg.boost_fps = nil, nil
 
 local Gameplay = {}
 
+-- FPS Limit (competitor parity, 2026-11-10): lobby and match; 0 leaves the executor's own cap alone.
+local function fpsCap(v) if setfpscap then pcall(setfpscap, v) end end
+if (cfg.fps_cap or 0) > 0 then fpsCap(cfg.fps_cap) end
+
 -- Modifier cards in Nousigi's default priority (1 = picked first); rank/cap per card in cfg.modifier.
 local CARDS = { "Yen I", "Yen II", "Yen III", "Active Cooldown I", "Active Cooldown II", "Active Cooldown III",
     "Cooldown I", "Cooldown II", "Cooldown III", "Boss Damage I", "Boss Damage II", "Boss Damage III",
@@ -223,9 +227,10 @@ if Tabs then
         list.refresh()
     end)
 
-    local perf = T:AddRightGroupbox("Performance (match only)", "gauge")
-    perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Cuts lag: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })
-    perf:AddToggle("PerfBlackScreen", { Text = "Black Screen (right-click shows the game)", Tooltip = "Turns 3D rendering off to save power. While it is on, right-click to bring the picture back or hide it again.", Default = cfg.black_screen, Callback = set(cfg, "black_screen", blackScreen) })
+    local perf = T:AddRightGroupbox("Performance", "gauge")
+    perf:AddSlider("FpsCap", { Text = "FPS Limit", Tooltip = "Caps the frame rate in the lobby and in matches, to save power on idle accounts. 0 = leave the executor's setting alone.", Default = cfg.fps_cap or 0, Min = 0, Max = 240, Rounding = 0, Callback = set(cfg, "fps_cap", fpsCap) })
+    perf:AddToggle("PerfMode", { Text = "Performance Mode", Tooltip = "Match only. Cuts lag: destroys map decor, textures, effects and lights, plain materials, lowest quality, hides enemy models and shows your own units as colored blocks (still clickable). Only ground, hills and paths stay. Cannot be undone mid-match: off applies next match.", Default = cfg.performance_mode, Callback = set(cfg, "performance_mode", omega) })
+    perf:AddToggle("PerfBlackScreen", { Text = "Black Screen (right-click shows the game)", Tooltip = "Match only. Turns 3D rendering off to save power. While it is on, right-click to bring the picture back or hide it again.", Default = cfg.black_screen, Callback = set(cfg, "black_screen", blackScreen) })
 
     local place = T:AddLeftGroupbox("Placement (match only)", "map-pin")
     place:AddToggle("PlaceAnywhere", { Text = "Place Anywhere", Tooltip = "Click-place units on the road and on top of other units. A click inside a copy of the same unit is moved 0.85 studs aside (the server refuses closer). Unit cap and money still apply.", Default = cfg.place_anywhere, Callback = set(cfg, "place_anywhere") })

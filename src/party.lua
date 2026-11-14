@@ -9,7 +9,7 @@ local LP = Players.LocalPlayer
 
 local cfg = Core.config.party or {}
 Core.config.party = cfg
-local defaults = { follow = false, host = false, names = "", wait = 45, accept = false }
+local defaults = { follow = false, host = false, names = "", wait = 45, accept = false, server_id = "", server_join = false, server_make = false }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
 local Party = {}
@@ -146,7 +146,65 @@ function Party.wait_for_party(pad)
     Core.log("party: wait over, starting without everyone", pad.Name)
 end
 
+-- Servers (competitor parity, 2026-11-10): the game's own player servers (HubGUI), read from its client code.
+-- hub_get_state -> { current = { locked, type [, id] }, mine = { id, locked, inside }, saved = {...} } (shape checked live, lobby);
+-- hub_join_id(id) and hub_my_server() teleport, hub_create() makes the server, hub_set_locked(bool). UNVERIFIED live: the three teleporting calls.
+-- shortcut: three tries (15 s apart) per ID, then the joiners go ahead; there is no way to look an ID up first.
+-- Pending from the start when a server option is on, so a joiner cannot slip in before the first check.
+local srvPending, srvTried, srvFails, srvLast = ((cfg.server_join and cfg.server_id ~= "") or cfg.server_make) and "server check" or nil, -99, 0, ""
+local function hubState()
+    local ok, res = pcall(Game.invoke, "hub_get_state")
+    if ok and type(res) == "table" then return res end
+end
+local function srvCall(name, ...)
+    srvTried = os.clock()
+    Core.save_config() -- a teleport may follow (OnTeleport does not fire)
+    local ok, ret = pcall(Game.invoke, name, ...)
+    Core.log("server:", name, ok, tostring(ret))
+end
+local function serverStep()
+    local st = hubState()
+    srvPending = nil
+    if not st then return end
+    local want = cfg.server_id:match("^%s*(.-)%s*$")
+    if want ~= srvLast then srvLast, srvFails = want, 0 end
+    local cur = st.current and st.current.id
+    if cfg.server_join and want ~= "" and cur ~= want and srvFails < 3 then
+        srvPending = "server " .. want
+        if os.clock() - srvTried > 15 then
+            srvFails += 1
+            srvCall("hub_join_id", want)
+        end
+        return
+    end
+    if cfg.server_make then
+        local mine = st.mine
+        if not mine then
+            srvPending = "own server"
+            if os.clock() - srvTried > 15 then srvCall("hub_create") end
+        elseif not mine.inside then
+            srvPending = "own server"
+            if os.clock() - srvTried > 15 then srvCall("hub_my_server") end
+        elseif mine.locked and os.clock() - srvTried > 5 then
+            srvCall("hub_set_locked", false)
+        end
+    end
+end
+-- Lobby.hold (src/lobby.lua): the joiners wait while this names a server we are still on our way to.
+function Party.server_pending() return srvPending end
+
 if Hub.mode == "lobby" then
+    task.spawn(function()
+        while alive() do
+            if (cfg.server_join and cfg.server_id ~= "") or cfg.server_make then
+                local ok, err = xpcall(serverStep, debug.traceback)
+                if not ok then Core.log("ERROR party server", err) end
+            else
+                srvPending = nil
+            end
+            task.wait(5)
+        end
+    end)
     task.spawn(function()
         task.wait(5)
         while alive() do
@@ -175,6 +233,21 @@ if Tabs then
     box:AddToggle("PartyAccept", { Text = "Auto Accept Party Invite", Tooltip = "Accepts a game party invite from a listed player (lobby). The host account invites with Summer > Multi Farm Role = Host.", Default = cfg.accept, Callback = set("accept") })
     box:AddToggle("PartyHost", { Text = "Host Mode", Tooltip = "The joiners wait for the listed players to be on the pad before starting the teleport.", Default = cfg.host, Callback = set("host") })
     box:AddSlider("PartyWait", { Text = "Host Wait (second)", Tooltip = "Longest the host waits for the party; it starts without them after that.", Default = cfg.wait, Min = 5, Max = 65, Rounding = 0, Callback = set("wait") })
+
+    local srv = Tabs.Joiner:AddRightGroupbox("Server", "server")
+    srv:AddInput("ServerId", { Text = "Server ID", Tooltip = "The ID of a player server (like XXXX-XXXX, from the game's Servers menu or the host's Copy My Server ID button).", Default = cfg.server_id, Placeholder = "XXXX-XXXX", Finished = true, Callback = function(v)
+        cfg.server_id = (v or ""):match("^%s*(.-)%s*$")
+        Core.save_config()
+    end })
+    srv:AddToggle("ServerJoin", { Text = "Auto Join Server", Tooltip = "Goes to that server whenever you are in another lobby. The joiners wait until you are there; after 3 failed tries (wrong ID, locked or full server) they go ahead.", Default = cfg.server_join, Callback = set("server_join") })
+    srv:AddToggle("ServerMake", { Text = "Host My Server", Tooltip = "Makes your player server if you have none, goes into it and unlocks it so your other accounts can join. The joiners wait until you are in it.", Default = cfg.server_make, Callback = set("server_make") })
+    srv:AddButton({ Text = "Copy My Server ID", Tooltip = "Copies your player server's ID, to paste into Server ID on your other accounts.", Func = function()
+        local st = hubState()
+        local id = st and st.mine and st.mine.id
+        if not id then return pcall(Hub.UI.Library.Notify, Hub.UI.Library, { Title = "Zeno Hub", Description = "You have no player server yet (turn on Host My Server).", Time = 5 }) end
+        if setclipboard then setclipboard(id) end
+        pcall(Hub.UI.Library.Notify, Hub.UI.Library, { Title = "Zeno Hub", Description = "Server ID copied.", Time = 5 })
+    end })
 end
 
 return Party

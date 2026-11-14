@@ -442,18 +442,19 @@ local function summonBanner()
     for _, n in { 10, 1 } do
         while alive() and cfg.shop.enable and pearls() - cfg.shop.keep >= PULL * n do
             local before = pearls()
-            local taken
-            for _ = 1, 3 do -- a refused call (cooldown) costs nothing: wait it out and try again, at most 3 times
+            local taken, sent
+            for _ = 1, 8 do -- a refused call (cooldown) costs nothing: retry quickly, so a pull lands the moment the cooldown ends
+                sent = os.clock()
                 call("buy_from_banner", BANNER, n == 10 and "gems10" or "gems")
-                taken = wait(function() return pearls() < before end, 4)
+                taken = wait(function() return pearls() < before end, 0.7)
                 if taken then break end
-                task.wait(3.5)
             end
             if not taken then Core.log("ERROR summer banner: a pull of", n, "was not taken") return end
             Core.log("summer banner: summoned", n, "pearls left", pearls())
             task.wait(1.5) -- the new items arrive a moment after the pearls drop
             if cfg.sellSkins.enable then pcall(Summer.sellSkins) end -- right after each pull, not on the loop's timer: a full inventory refuses new items
-            task.wait(1.9) -- 3.4 s in all, the server's cooldown between pulls
+            local rest = sent + 3.4 - os.clock() -- the server's cooldown between pulls, counted from the send (selling runs inside it)
+            if rest > 0 then task.wait(rest) end
         end
     end
 end
@@ -481,7 +482,12 @@ if LOBBY then
     task.spawn(function()
         while alive() do
             if cfg.shop.enable then pass("banner", summonBanner) end
-            task.wait(20)
+            local on = cfg.shop.enable -- sleep 20 s, but start the moment the toggle is switched on
+            for _ = 1, 80 do
+                if cfg.shop.enable and not on then break end
+                on = cfg.shop.enable
+                task.wait(0.25)
+            end
         end
     end)
 end

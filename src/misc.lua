@@ -14,7 +14,8 @@ local MATCH = Hub.mode == "match"
 
 local cfg = Core.config.misc or {}
 Core.config.misc = cfg
-local defaults = { lobby_on_join = false, walk_units = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true }
+local defaults = { lobby_on_join = false, walk_units = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true,
+    leave_idle = false, idle_secs = 120, leave_weak = false, weak_dmg = 0, weak_wave = 24 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 -- Walk Around and Rejoin Ping Freeze were removed 2026-11-10 (Walk To Units covers the first, the second never fired in the logs).
 cfg.walk, cfg.ping_freeze = nil, nil
@@ -53,17 +54,84 @@ end
 local players = Tabs.Misc:AddRightGroupbox("Players", "users")
 players:AddToggle("LobbyOnJoin", { Text = "Teleport to Lobby if Players Join", Tooltip = "Match only: returns to the lobby when another player is in your server. Players listed in Joiner > Party Player are ignored.", Default = cfg.lobby_on_join, Callback = set("lobby_on_join") })
 
+-- A name token matches a player by (the start of) their user name or display name.
+local function matches(p, token)
+    token = token:lower()
+    return p.Name:lower():sub(1, #token) == token or p.DisplayName:lower():sub(1, #token) == token
+end
 local function exempt(p)
     local names = (Core.config.party and Core.config.party.names) or ""
-    local n, d = p.Name:lower(), p.DisplayName:lower()
     for token in names:gmatch("[^,;%s]+") do
-        token = token:lower()
-        if n == token or d == token or n:sub(1, #token) == token or d:sub(1, #token) == token then return true end
+        if matches(p, token) then return true end
     end
     return false
 end
 
+-- Player protection (competitor parity, 2026-11-10): the first listed name that is not in this server yet, or nil.
+-- Lobby.hold (src/lobby.lua) holds the joiners and the Summer Hunt while this returns one.
+function Misc.missing_players()
+    for token in (cfg.wait_names or ""):gmatch("[^,;%s]+") do
+        local here = false
+        for _, p in Players:GetPlayers() do
+            if p ~= LP and matches(p, token) then here = true break end
+        end
+        if not here then return token end
+    end
+end
+players:AddInput("WaitNames", { Text = "Hold Joins until Here", Tooltip = "Names (separated by commas) of players who must be in your lobby server before any joiner runs. Empty = off. The start of a name is enough.", Default = cfg.wait_names or "", Placeholder = "name1, name2", Callback = function(v) cfg.wait_names = v Core.save_config() end })
+
+-- Hide Other Players: only on your screen. Their characters are made invisible again every 2 s (accessories load late); off shows them at once.
+players:AddToggle("HideOthers", { Text = "Hide Other Players", Tooltip = "Only on your screen. Turn off to show them again.", Default = cfg.hide_others, Callback = set("hide_others") })
+local function hideChar(char, on)
+    for _, d in char:GetDescendants() do
+        if d:IsA("BasePart") then d.LocalTransparencyModifier = on and 1 or 0 end
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.DisplayDistanceType = on and Enum.HumanoidDisplayDistanceType.None or Enum.HumanoidDisplayDistanceType.Viewer end
+end
+task.spawn(function()
+    local was = false
+    while alive() do
+        if cfg.hide_others or was then
+            for _, p in Players:GetPlayers() do
+                if p ~= LP and p.Character then pcall(hideChar, p.Character, cfg.hide_others) end
+            end
+            was = cfg.hide_others
+        end
+        task.wait(2)
+    end
+end)
+
+-- Leave if I Deal No Damage / Leave on Weak Teammates (competitor parity, 2026-11-10). Every player carries a `_stats.damage_dealt`
+-- NumberValue (checked live on our own player, lobby; other players' copies UNVERIFIED). The level check of the competitor is not built.
 if MATCH then
+    task.spawn(function()
+        local lastDmg, lastMove = nil, os.clock()
+        while alive() do
+            task.wait(2)
+            local data = workspace:FindFirstChild("_DATA")
+            local started, fin = data and data:FindFirstChild("GameStarted"), data and data:FindFirstChild("GameFinished")
+            local wave = workspace:FindFirstChild("_wave_num")
+            if leaving or not (started and fin and wave) then continue end
+            local mine = LP:FindFirstChild("_stats") and LP._stats:FindFirstChild("damage_dealt")
+            if not (started.Value and not fin.Value and wave.Value >= 1 and mine) then
+                lastMove = os.clock() -- the clock starts at wave 1
+            else
+                if mine.Value ~= lastDmg then lastDmg, lastMove = mine.Value, os.clock() end
+                if cfg.leave_idle and os.clock() - lastMove >= cfg.idle_secs then
+                    Misc.rejoin(("no damage for %d s"):format(cfg.idle_secs))
+                elseif cfg.leave_weak and wave.Value >= cfg.weak_wave then
+                    for _, p in Players:GetPlayers() do
+                        local d = p ~= LP and not exempt(p) and p:FindFirstChild("_stats") and p._stats:FindFirstChild("damage_dealt")
+                        if d and d.Value <= cfg.weak_dmg then
+                            Misc.rejoin(("%s dealt %d damage by wave %d"):format(p.Name, d.Value, wave.Value))
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end)
     task.spawn(function()
         while alive() do
             task.wait(2)
@@ -90,6 +158,16 @@ function Misc.walkTo(pos)
 end
 if secure then
     secure:AddToggle("WalkToUnits", { Text = "Walk To Units", Tooltip = "Match only: the character walks to the unit Auto Play just placed or upgraded.", Default = cfg.walk_units, Callback = set("walk_units") })
+    local idleSecs, weakDmg, weakWave
+    local function showIdle(on) if idleSecs then idleSecs:SetVisible(on) end end
+    local function showWeak(on) if weakDmg then weakDmg:SetVisible(on) weakWave:SetVisible(on) end end
+    secure:AddToggle("LeaveIdle", { Text = "Leave if I Deal No Damage", Tooltip = "Match only. Goes back to the lobby when your units have dealt no damage for the time below (counted from wave 1), so an idle account is not banned for being idle. Leave it off for teams that only farm or buff.", Default = cfg.leave_idle, Callback = function(v) cfg.leave_idle = v Core.save_config() showIdle(v) end })
+    idleSecs = secure:AddSlider("IdleSecs", { Text = "No Damage for (s)", Default = cfg.idle_secs, Min = 30, Max = 600, Rounding = 0, Callback = set("idle_secs") })
+    secure:AddToggle("LeaveWeak", { Text = "Leave on Weak Teammates", Tooltip = "Match only, other players only. Goes back to the lobby when a teammate (not one listed in Joiner > Party Player) has dealt no more than the damage below by the wave below.", Default = cfg.leave_weak, Callback = function(v) cfg.leave_weak = v Core.save_config() showWeak(v) end })
+    weakDmg = secure:AddSlider("WeakDmg", { Text = "Teammate Damage at most", Default = cfg.weak_dmg, Min = 0, Max = 100000, Rounding = 0, Callback = set("weak_dmg") })
+    weakWave = secure:AddSlider("WeakWave", { Text = "Check from Wave", Default = cfg.weak_wave, Min = 1, Max = 100, Rounding = 0, Callback = set("weak_wave") })
+    showIdle(cfg.leave_idle)
+    showWeak(cfg.leave_weak)
 end
 
 -- Settings > Information

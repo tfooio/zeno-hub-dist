@@ -1,2 +1,2 @@
-75ed930 2026-11-10
-Webhook: ping on Sky God / Explosion Mage / Phoenix unit and portal drops
+edbdd3f 2026-11-14
+Auto summon starts at once on toggle, faster Summer banner pulls

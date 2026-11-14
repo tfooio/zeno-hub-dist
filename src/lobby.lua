@@ -474,7 +474,14 @@ end
 -- true = a lobby job (summon, shop, stars, claim, Summer banner / merchant) is still working, so a join should wait.
 -- shortcut: gives up after 30 minutes so a stuck job cannot hold the joiners for good.
 local WAIT_CAP, waitSince = 1800, nil
+local waitingFor
 function Lobby.hold()
+    -- Misc > Players "Hold Joins until Here" (players who must be in this server first) and Joiner > Server (the server to be in).
+    -- No time cap: the user chose them; the server hold ends by itself after 3 failed tries.
+    local miss = Hub.Misc and Hub.Misc.missing_players and Hub.Misc.missing_players()
+    if not miss and Hub.Party and Hub.Party.server_pending then miss = Hub.Party.server_pending() end
+    if miss ~= waitingFor then waitingFor = miss if miss then Core.log("lobby: joins wait for", miss) end end
+    if miss then return true end
     local why = busy()
     if not why and Hub.Summer and Hub.Summer.busy then why = Hub.Summer.busy() end
     if not why then waitSince = nil return false end
@@ -493,7 +500,12 @@ local function every(name, sec, enabled, fn, noProfile)
                 j.running, j.passed = false, true
                 if not ok then Core.log("ERROR lobby", name, err) end
             end
-            task.wait(sec)
+            local on = enabled() -- sleep sec, but run the moment the toggle is switched on
+            for _ = 1, sec * 4 do
+                if enabled() and not on then break end
+                on = enabled()
+                task.wait(0.25)
+            end
         end
     end)
 end
