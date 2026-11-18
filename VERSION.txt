@@ -1,2 +1,2 @@
-0859395 2026-11-17
-Units tab, Trickster Smart rule, Phoenix sells all
+36c5ae7 2026-11-17
+Units tab: one-sentence ability descriptions

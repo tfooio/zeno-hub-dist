@@ -14,16 +14,15 @@ local S = lib.Scheme
 
 -- id = the game's unit id (the picture comes from it), title = page name when the game's name is not the one to show, tag = the line under the name,
 -- status = replaces the owned / not owned line (for a unit nobody owns: it only exists in a match), look = the unit whose picture is shown instead.
-local BUFF = "Casts a team damage buff on a long cooldown. Smart Auto Ability casts four placed copies as a chain, exactly on cooldown, so the buff is up about 94% of the time (measured on the Commander chain: +25% damage, 30 s). Nothing is cast with fewer than 4 copies placed."
 local ENTRIES = {
-    { id = "erwin", tag = "Buff chain", text = BUFF },
-    { id = "wendy", tag = "Buff chain", text = "Same buff chain as the Commander: four placed copies are cast in turn so the buff stays up." },
-    { id = "leafa_evolved", tag = "Buff chain", text = "Same buff chain as the Commander (her buff is a magic damage buff): four placed copies are cast in turn so the buff stays up. Cursed (+SPA) copies reach the cooldown ceiling of about 94% uptime." },
-    { id = "kisuke_evolved", tag = "Team buff", text = "Up to three copies. His active ability (Kannonbiraki Benihime Aratame) unlocks at upgrade 6 and buffs all your units for 30 s: +20% range and 10% faster attacks. Cooldown 90 s at max upgrade, so three copies can keep it up all the time. A cast while the buff is on is ignored, so Smart Auto Ability casts a ready copy right after the buff ends, while enemies are alive." },
-    { id = "homura_evolved", tag = "Time stop", text = "Stops time. Smart Auto Ability takes turns between her copies, one cast every max(cooldown / copies, Min Gap) seconds, and only while an enemy is in range, so a stop never lands on enemies that cannot be stopped again yet. Min Gap 12 = her 4 s stop + 8 s immunity; lower it to stop more often." },
-    { id = "rukia_bankai_evolved", tag = "Freeze meter", text = "Freezes enemies while she is on; a meter drains (about 5 per second on) and refills (about 2.5 per second off). Smart Auto Ability keeps one copy on at a time and hands over to the fullest idle copy before the meter runs out, only while enemies are in range. About 92% uptime with three copies (measured); 100% is not reachable." },
-    { id = "vegito", look = "goku_ssj3_evolved", title = "Vegito (Fusion)", tag = "Fusion", status ="Made in a match by fusing Carrot and Vego", text = "Carrot (Ultra) and Vego (Mage II) fuse into Vegito at upgrade 7. With both on the hotbar, Auto Fuse upgrades them to level 7, casts the fusion on the better one (stat potentials, level, relic), then upgrades the Fused Hero to its maximum. Needs Auto Play." },
-    { id = "marco_evolved", tag = "Reincarnation", text = "Reincarnation: selling Phoenix (Mythic Flames) at max upgrade gives +50% damage to every Phoenix placed after that sale (only the first sale counts). The hub sells the first one at max, then all your other Phoenixes one at a time, lowest upgrade first; Auto Play places them again and upgrades them. A sale refunds about 25% of what the unit cost, so the money is gone. Needs Auto Play, Phoenix on the hotbar and his Upgrade Cap at max." },
+    { id = "erwin", tag = "Buff chain", text = "Casts a team damage buff. Smart casts four copies in a chain to keep it up." },
+    { id = "wendy", tag = "Buff chain", text = "Casts a team buff. Smart casts four copies in a chain to keep it up." },
+    { id = "leafa_evolved", tag = "Buff chain", text = "Casts a team buff. Smart casts four copies in a chain to keep it up." },
+    { id = "kisuke_evolved", tag = "Team buff", text = "Buffs every unit for 30 s: +20% range, 10% faster attacks. Smart casts a copy as soon as the buff ends." },
+    { id = "homura_evolved", tag = "Time stop", text = "Stops time. Smart takes turns between copies while enemies are in range." },
+    { id = "rukia_bankai_evolved", tag = "Freeze meter", text = "Freezes enemies while on, until her meter runs out. Smart keeps one copy on at a time." },
+    { id = "vegito", look = "goku_ssj3_evolved", title = "Vegito (Fusion)", tag = "Fusion", status = "Made in a match by fusing Carrot and Vego", text = "Fuses Carrot and Vego. Auto Fuse upgrades them to 7, fuses the better one, then upgrades Vegito to max." },
+    { id = "marco_evolved", tag = "Reincarnation", text = "Sells units when one of them reaches max level." },
 }
 
 local function new(class, props, parent)
