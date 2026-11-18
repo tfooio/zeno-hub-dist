@@ -244,7 +244,7 @@ end
 local function openStar(id)
     local last
     local c = s2c.show_unit_and_item_rewards.OnClientEvent:Connect(function(items, uuids) last = { items, uuids } end)
-    while alive() and cfg.stars.enable and count(id) > 0 do
+    while alive() and cfg.stars.enable and count(id) > (cfg.stars.keep or 0) do
         local n = count(id)
         last = nil
         Core.log("lobby open star", id, n)
@@ -260,7 +260,7 @@ local function openStar(id)
 end
 local function stars()
     for id, on in cfg.stars.items do
-        if on and count(id) > 0 then quietly(openStar, id) end
+        if on and count(id) > (cfg.stars.keep or 0) then quietly(openStar, id) end
     end
 end
 
@@ -609,6 +609,7 @@ local function buildUI()
     local inv = T:AddRightGroupbox("Inventory", "package")
     inv:AddToggle("LobbyStars", { Text = "Auto Open Star (Capsule)", Tooltip = "Opens every owned star of the selected types.", Default = cfg.stars.enable, Callback = set(cfg.stars, "enable") })
     local starValues, starMap = labels(starIds, itemName)
+    inv:AddSlider("LobbyStarKeep", { Text = "Keep Stars (each type)", Tooltip = "Never opens the last N stars of a type (for example Sunny Stars saved for a banner day). 0 = open all.", Default = cfg.stars.keep or 0, Min = 0, Max = 500, Rounding = 0, Callback = set(cfg.stars, "keep") })
     inv:AddDropdown("LobbyStarItems", { Text = "Select Star", Values = starValues, Multi = true, Default = selected(cfg.stars.items), Callback = picker(cfg.stars, "items", starMap) })
     inv:AddButton({ Text = "Select All Stars", Tooltip = "Ticks every star type in the list above.", Func = function()
         local all = {}

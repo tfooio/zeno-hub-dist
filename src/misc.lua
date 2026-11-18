@@ -15,7 +15,7 @@ local MATCH = Hub.mode == "match"
 local cfg = Core.config.misc or {}
 Core.config.misc = cfg
 local defaults = { lobby_on_join = false, walk_units = false, ui_key = "RightControl", ui_button = false, auto_rejoin = true,
-    leave_idle = false, idle_secs = 120, leave_weak = false, weak_dmg = 0, weak_wave = 24 }
+    leave_idle = false, idle_secs = 120, leave_weak = false, weak_dmg = 0, weak_wave = 24, leave_low = false, low_dmg = 100000, min_players = 0 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 -- Walk Around and Rejoin Ping Freeze were removed 2026-11-10 (Walk To Units covers the first, the second never fired in the logs).
 cfg.walk, cfg.ping_freeze = nil, nil
@@ -120,6 +120,10 @@ if MATCH then
                 if mine.Value ~= lastDmg then lastDmg, lastMove = mine.Value, os.clock() end
                 if cfg.leave_idle and os.clock() - lastMove >= cfg.idle_secs then
                     Misc.rejoin(("no damage for %d s"):format(cfg.idle_secs))
+                elseif cfg.leave_low and wave.Value >= cfg.weak_wave and mine.Value < cfg.low_dmg then
+                    Misc.rejoin(("my damage %d is under %d at wave %d"):format(mine.Value, cfg.low_dmg, wave.Value))
+                elseif cfg.min_players > 0 and #Players:GetPlayers() < cfg.min_players then
+                    Misc.rejoin(("only %d players left, minimum %d"):format(#Players:GetPlayers(), cfg.min_players))
                 elseif cfg.leave_weak and wave.Value >= cfg.weak_wave then
                     for _, p in Players:GetPlayers() do
                         local d = p ~= LP and not exempt(p) and p:FindFirstChild("_stats") and p._stats:FindFirstChild("damage_dealt")
@@ -166,6 +170,11 @@ if secure then
     secure:AddToggle("LeaveWeak", { Text = "Leave on Weak Teammates", Tooltip = "Match only, other players only. Goes back to the lobby when a teammate (not one listed in Joiner > Party Player) has dealt no more than the damage below by the wave below.", Default = cfg.leave_weak, Callback = function(v) cfg.leave_weak = v Core.save_config() showWeak(v) end })
     weakDmg = secure:AddSlider("WeakDmg", { Text = "Teammate Damage at most", Default = cfg.weak_dmg, Min = 0, Max = 100000, Rounding = 0, Callback = set("weak_dmg") })
     weakWave = secure:AddSlider("WeakWave", { Text = "Check from Wave", Default = cfg.weak_wave, Min = 1, Max = 100, Rounding = 0, Callback = set("weak_wave") })
+    local lowDmg
+    secure:AddToggle("LeaveLow", { Text = "Leave if My Damage is Low", Tooltip = "Match only. Goes back to the lobby when your own damage is still under the amount below at the wave set under Check from Wave. For Summer Hunt runs where you must pull your weight.", Default = cfg.leave_low, Callback = function(v) cfg.leave_low = v Core.save_config() if lowDmg then lowDmg:SetVisible(v) end end })
+    lowDmg = secure:AddSlider("LowDmg", { Text = "My Damage at least", Default = cfg.low_dmg, Min = 0, Max = 10000000, Rounding = 0, Callback = set("low_dmg") })
+    lowDmg:SetVisible(cfg.leave_low)
+    secure:AddSlider("MinPlayers", { Text = "Leave if Fewer Players Than", Tooltip = "Match only. Goes back to the lobby when the server has fewer players than this (counting you). 0 = off. Use it for a party run that is worthless once a friend drops.", Default = cfg.min_players, Min = 0, Max = 6, Rounding = 0, Callback = set("min_players") })
     showIdle(cfg.leave_idle)
     showWeak(cfg.leave_weak)
 end

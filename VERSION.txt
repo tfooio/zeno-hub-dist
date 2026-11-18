@@ -1,2 +1,2 @@
-edbdd3f 2026-11-14
-Auto summon starts at once on toggle, faster Summer banner pulls
+0859395 2026-11-17
+Units tab, Trickster Smart rule, Phoenix sells all

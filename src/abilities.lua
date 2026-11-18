@@ -16,13 +16,20 @@ local Abilities = {}
 local function alive() return env.ZenoHub == Hub end
 
 -- The units a smart rule is built for, in dropdown order, and the rule each uses.
-local SMART_ORDER = { "erwin", "wendy", "leafa_evolved", "homura_evolved", "rukia_bankai_evolved" }
-local SMART = { erwin = "Buff chain", wendy = "Buff chain", leafa_evolved = "Buff chain", homura_evolved = "Rotation (spaced)",
+local SMART_ORDER = { "erwin", "wendy", "leafa_evolved", "kisuke_evolved", "homura_evolved", "rukia_bankai_evolved" }
+local SMART = { erwin = "Buff chain", wendy = "Buff chain", leafa_evolved = "Buff chain", kisuke_evolved = "Buff cover", homura_evolved = "Rotation (spaced)",
     rukia_bankai_evolved = "Meter rotation" }
 -- First load of this option: select all of them, which is what the old single toggle did for these units.
 if cfg.smart_units == nil then
     cfg.smart_units = {}
     for _, id in SMART_ORDER do cfg.smart_units[id] = true end
+end
+-- Units tab (docs/features/units-tab.md): Smart is one toggle per unit now, the global toggle is gone. A unit was only cast when both were on, so
+-- once (cfg.smart_v2) a unit stays on only if the old global toggle was on; cfg.smart is then always on.
+if not cfg.smart_v2 then
+    if not cfg.smart then cfg.smart_units = {} end
+    cfg.smart, cfg.smart_v2 = true, true
+    Core.save_config()
 end
 -- Summer Hunt started by Auto Summer Hunt: its own settings (src/summer.lua), the saved ones are not read or written.
 do
@@ -73,22 +80,20 @@ end
 local Tabs = Hub.UI and Hub.UI.Tabs
 if Tabs then
     local box = Tabs.Game:AddLeftGroupbox("Abilities", "zap")
-    box:AddToggle("AbilitySmart", { Text = "Smart Auto Ability", Tooltip = "Casts the units selected below by the rule built for each.", Default = cfg.smart, Callback = function(v) cfg.smart = v Core.save_config() end })
-    local names, idByName, picked = {}, {}, {}
+    box:AddToggle("AbilityNormal", { Text = "Normal Auto Ability", Tooltip = "Casts ready abilities of the hotbar units Smart Auto Ability (Units tab) does not handle.", Default = cfg.normal, Callback = function(v) cfg.normal = v Core.save_config() end })
+    -- Smart is one toggle per unit, on the unit's page in the Units tab (without the tab they stay here, so no option is lost).
+    local tip = "Casts this unit by the rule built for it (see the text above)."
     for _, id in SMART_ORDER do
         if defs[id] then
-            table.insert(names, defs[id].name)
-            idByName[defs[id].name] = id
-            if cfg.smart_units[id] then table.insert(picked, defs[id].name) end
+            local page = Hub.Units and Hub.Units.box(id)
+            ;(page or box):AddToggle("AbilitySmart_" .. id, { Text = page and "Smart Auto Ability" or ("Smart: " .. defs[id].name), Tooltip = tip, Default = cfg.smart_units[id] == true, Callback = function(v)
+                cfg.smart_units[id] = v or nil
+                Core.save_config()
+            end })
         end
     end
-    box:AddDropdown("AbilitySmartUnits", { Text = "Select Smart Units", Tooltip = "Smart only acts on these. Commander, Windsong, Elfy: cast together as a 4-copy chain, nothing until all 4 are placed. Shadowgirl: copies take turns. Snow Reaper: one on at a time.", Values = names, Multi = true, Default = picked, Callback = function(v)
-        cfg.smart_units = {}
-        for name, on in v do if on and idByName[name] then cfg.smart_units[idByName[name]] = true end end
-        Core.save_config()
-    end })
-    box:AddToggle("AbilityNormal", { Text = "Normal Auto Ability", Tooltip = "Casts ready abilities of the hotbar units Smart does not handle.", Default = cfg.normal, Callback = function(v) cfg.normal = v Core.save_config() end })
-    box:AddSlider("AbilityGap", { Text = "Shadowgirl Min Gap (s)", Tooltip = "Only for Shadowgirl: the shortest wait between two of her time stops, so the next one does not land on enemies that cannot be stopped again yet. 12 = her 4 s stop + 8 s immunity. Lower it to stop more often.", Default = cfg.gap, Min = 0, Max = 30, Rounding = 1, Callback = function(v) cfg.gap = v Core.save_config() end })
+    local shadow = Hub.Units and Hub.Units.box("homura_evolved")
+    ;(shadow or box):AddSlider("AbilityGap", { Text = "Shadowgirl Min Gap (s)", Tooltip = "The shortest wait between two of her time stops, so the next one does not land on enemies that cannot be stopped again yet. 12 = her 4 s stop + 8 s immunity. Lower it to stop more often.", Default = cfg.gap, Min = 0, Max = 30, Rounding = 1, Callback = function(v) cfg.gap = v Core.save_config() end })
 end
 
 if Hub.mode ~= "match" then return Abilities end
@@ -383,6 +388,44 @@ local function runRotation(id, units)
     end
 end
 
+-- Buff cover (Trickster (Release), kisuke_evolved): one cast buffs every ally for 30 s (+20% range, 10% faster attacks), and a cast while that
+-- buff is on is IGNORED: tested live 2026-11-17, a second copy cast 12 s into the buff did not extend it, the buff ended 30.3 s after the first
+-- cast and the second copy's cooldown (90 s) was spent for nothing. So a ready copy casts right after the last buff has ended: with 3 copies
+-- (3 x 30 s = the 90 s cooldown) the buff is up all but a fraction of a second per 30 s; with fewer copies the cooldown is the limit. The end is
+-- estimated from the newest `last_active_cast` of the copies (it also counts casts we did not make); while a copy still shows the buff we wait
+-- up to 1 s more. Only while an enemy is alive (the buff is wasted on an empty map).
+local COVER_LEN = 30
+local function lastCast(u) local l = u._stats:FindFirstChild("last_active_cast") return l and l.Value or -1e9 end
+local function anyEnemy()
+    for _, e in workspace._UNITS:GetChildren() do
+        local es = e:FindFirstChild("_stats")
+        local owner = es and es:FindFirstChild("player")
+        if owner and owner.Value == nil then
+            local h = e:FindFirstChildOfClass("Humanoid")
+            if not h or h.Health > 0 then return true end
+        end
+    end
+    return false
+end
+local function runCover(id, units)
+    local newest = -1e9
+    for _, u in units do newest = math.max(newest, lastCast(u)) end
+    local left = newest + COVER_LEN - tick()
+    if left > 0 then return end -- the buff is still on
+    if left > -1 then
+        for _, u in units do
+            local b = u:FindFirstChild("_buffs") and u._buffs:FindFirstChild("range_buff")
+            if b and b.Value ~= 0 then return end -- still shown on the copy: the estimate is early
+        end
+    end
+    if not anyEnemy() then return end
+    local pick
+    for _, u in units do
+        if ready(u) and (not pick or lastCast(u) < lastCast(pick)) then pick = u end -- the copy that has waited longest
+    end
+    if pick then cast(pick, "cover") end
+end
+
 -- Meter rotation (toggle abilities with a draining bar, e.g. Snow Reaper): one on at a time while enemies
 -- are in range; when its bar is low, turn on the fullest idle one, then the low one off. Tested 2026-10-23.
 -- Measured live 2026-11-02 (3 copies, `unit_bar`): drain about 5/s while on, refill about 2.5/s while off, and a refill pause of about 3 s after a bar hits 0.
@@ -435,6 +478,7 @@ local function pass()
             if smartOn(id) then
                 local rule = SMART[id]
                 if rule == "Buff chain" then runChain(id, units)
+                elseif rule == "Buff cover" then runCover(id, units)
                 elseif rule == "Rotation (spaced)" then runRotation(id, units)
                 else runMeter(units) end
             elseif cfg.normal then

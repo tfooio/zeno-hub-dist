@@ -9,7 +9,7 @@ local env = getgenv()
 
 local cfg = Core.config.macro or {}
 Core.config.macro = cfg
-local defaults = { play = false, retries = 10, overlay = true, maps = {}, ignore_timing = false, sell_timing = true }
+local defaults = { play = false, retries = 10, overlay = true, maps = {}, ignore_timing = false, sell_timing = true, vote_start = false, first_delay = 0 }
 for k, v in defaults do if cfg[k] == nil then cfg[k] = v end end
 
 local Macro = {}
@@ -247,6 +247,8 @@ if Tabs then
     local conf = Tabs.Macro:AddRightGroupbox("Play Macro Config", "sliders-horizontal")
     conf:AddToggle("MacroIgnoreTiming", { Text = "Ignore Macro Timing", Tooltip = "Run each step as soon as its wave is reached and it is affordable; recorded wave skips are not sent.", Default = cfg.ignore_timing, Callback = set("ignore_timing") })
     conf:AddToggle("MacroSellTiming", { Text = "No Ignore Sell Timing", Tooltip = "Keep the recorded seconds for sell steps even with Ignore Macro Timing on.", Default = cfg.sell_timing, Callback = set("sell_timing") })
+    conf:AddToggle("MacroVoteStart", { Text = "Macro Votes Start", Tooltip = "While a macro plays, the macro votes the match start itself (modes that wait for a vote), so Auto Vote Start in the Game tab is not needed.", Default = cfg.vote_start, Callback = set("vote_start") })
+    conf:AddSlider("MacroFirstDelay", { Text = "First Placement Delay (s)", Tooltip = "Seconds to wait after the match has started before the macro's first step. 0 = no wait.", Default = cfg.first_delay, Min = 0, Max = 30, Rounding = 1, Callback = set("first_delay") })
     conf:AddSlider("MacroRetries", { Text = "Macro Retry Limit", Tooltip = "Failed tries before a step is skipped. 0 = never skip.", Default = cfg.retries, Min = 0, Max = 100, Rounding = 0, Callback = set("retries") })
     conf:AddToggle("MacroOverlay", { Text = "Show status bar", Default = cfg.overlay, Callback = function(v)
         set("overlay")(v)
@@ -533,6 +535,22 @@ function Macro.start()
                 task.wait(0.5)
             end
         end)
+        -- Macro Vote Start (CartiHub parity, 2026-11-17): the macro votes the start itself, so Game > Auto Vote Start is not needed for macro runs.
+        if cfg.vote_start then
+            task.spawn(function()
+                local data = workspace:WaitForChild("_DATA", 30)
+                local vf = data and data:FindFirstChild("VoteStart") and data.VoteStart:WaitForChild("VotingFinished", 10)
+                while run.live() and vf and not vf.Value do pcall(Game.invoke, "vote_start") task.wait(2) end
+            end)
+        end
+        -- First Placement Delay: seconds after the match has started before the first step runs (a hub slower than the others still places in time).
+        if cfg.first_delay > 0 then
+            local data = workspace:FindFirstChild("_DATA")
+            local started = data and data:FindFirstChild("GameStarted")
+            while run.live() and started and not started.Value do status("wait", "match start") task.wait(0.5) end
+            local t0 = os.clock()
+            while run.live() and os.clock() - t0 < cfg.first_delay do status("wait", ("first placement in %.0fs"):format(cfg.first_delay - (os.clock() - t0))) task.wait(0.25) end
+        end
         local i = 1
         while run.live() and i <= #steps do
             local s = steps[i]

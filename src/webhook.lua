@@ -253,6 +253,9 @@ local function balanceFields()
         { name = "\u{200b}", value = table.concat(cols[2], "\n"), inline = true }
 end
 
+-- Build version in the footer (CartiHub parity, 2026-11-17): says which build sent a report when friends run different ones. Empty on a dev checkout.
+local function buildTag() return Hub.version and Hub.version ~= "" and ("build " .. Hub.version) or "" end
+
 function Webhook.embed(rec)
     local rewards = {}
     if (rec.gems or 0) > 0 then table.insert(rewards, gainLine("gems", "Gems", rec.gems)) end
@@ -276,10 +279,15 @@ function Webhook.embed(rec)
     local fields = {}
     if #rewards > 0 then table.insert(fields, { name = "Rewards", value = table.concat(rewards, "\n"), inline = false }) end
     if #drops > 0 then table.insert(fields, { name = "Drops", value = table.concat(drops, "\n"):sub(1, 1000), inline = false }) end
-    local b1, b2 = balanceFields()
-    table.insert(fields, b1)
-    table.insert(fields, b2)
-    local footer = { tostring(rec.user or ""), levelText() }
+    if not cfg.compact then -- Compact Result: no balance fields, just the summary, rewards and drops
+        local b1, b2 = balanceFields()
+        table.insert(fields, b1)
+        table.insert(fields, b2)
+    end
+    local footer = {}
+    for _, t in { tostring(rec.user or ""), levelText(), buildTag() } do
+        if t ~= "" and t ~= nil then table.insert(footer, t) end
+    end
     local new_unit = type(rec.new_units) == "table" and #rec.new_units > 0
     return {
         username = "Zeno Hub",
@@ -317,7 +325,7 @@ function Webhook.chestEmbed(rec)
             description = "The last room is done but the chests will not open. The hub keeps trying and stays out of the lobby until they are open.",
             color = 0xE74C3C,
             fields = { { name = "Chests left", value = ("%s normal, %s rare"):format(num(rec.normal), num(rec.rare)), inline = true } },
-            footer = { text = tostring(rec.user or "") },
+            footer = { text = tostring(rec.user or "") .. (buildTag() ~= "" and "  ·  " .. buildTag() or "") },
             timestamp = rec.date,
         } } }
     end
@@ -344,7 +352,7 @@ function Webhook.chestEmbed(rec)
         title = opened and "Dungeon chests opened" or "Dungeon rewards",
         color = opened and 0xF1C40F or 0x9B59B6,
         fields = fields,
-        footer = { text = tostring(rec.user or "") },
+        footer = { text = tostring(rec.user or "") .. (buildTag() ~= "" and "  ·  " .. buildTag() or "") },
         timestamp = rec.date,
     } } }
 end
@@ -428,6 +436,7 @@ if Tabs then
     local note = Tabs.Webhook:AddRightGroupbox("Notification", "bell")
     note:AddToggle("WebhookRare", { Text = "Sky God / Explosion Mage / Phoenix Drop", Tooltip = "Pings the Discord User ID when a match drops Sky God, Explosion Mage or Phoenix, or Sky God's or Explosion Mage's Portal. Sent even if Game Finished is off.", Default = cfg.rare, Callback = function(v) cfg.rare = v Core.save_config() end })
     note:AddToggle("WebhookEvolve", { Text = "Unit Ready to Evolve", Tooltip = "Pings the Discord User ID once when an equipped unit's lifetime takedowns reach its evolve requirement (checked in the Info tab loop; the game updates the total after a match).", Default = cfg.evolve, Callback = function(v) cfg.evolve = v Core.save_config() end })
+    note:AddToggle("WebhookCompact", { Text = "Compact Result", Tooltip = "Game Finished without the balance fields (gems, gold, remnants in hand): a shorter message.", Default = cfg.compact, Callback = function(v) cfg.compact = v Core.save_config() end })
     note:AddToggle("WebhookEnabled", { Text = "Game Finished", Default = cfg.enabled, Callback = function(v) cfg.enabled = v Core.save_config() end })
     note:AddToggle("WebhookChest", { Text = "Dungeon Chest Opened", Tooltip = "After the last dungeon room: the chests opened, your luck, and what the inventory gained.", Default = cfg.chest, Callback = function(v) cfg.chest = v Core.save_config() end })
 end

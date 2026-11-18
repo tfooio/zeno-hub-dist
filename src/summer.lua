@@ -51,6 +51,14 @@ local WEATHERS = {}
 for _, id in ORDER do if Weather[id] then table.insert(WEATHERS, id) end end
 local function weatherName(id) return id == "default" and "Any weather (default)" or (Weather[id] and Weather[id].name) or id end
 
+-- Only Join on Starfall (CartiHub parity, 2026-11-17): Star Golems drop Broken Stars in Starfall weather. Starfall is the `meteor_shower` weather
+-- id (the event pad's default); its display name in the Weather data is UNVERIFIED. src/watchdog.lua reads this so the wait is not a stall.
+function Summer.waitingStarfall()
+    if not (cfg.enable and cfg.onlyStarfall and LOBBY) then return false end
+    local w = Summer.weather()
+    return w ~= nil and w ~= "meteor_shower"
+end
+
 function Summer.weather()
     if LOBBY then
         local pad = workspace:FindFirstChild("_EVENT_CHALLENGES") and workspace._EVENT_CHALLENGES.Lobbies:FindFirstChild(PAD)
@@ -343,6 +351,7 @@ local function hunt()
     if Hub.Lobby and Hub.Lobby.hold and Hub.Lobby.hold() then return idle("lobby jobs still running (summons, shops)") end
     local w = Summer.weather()
     if not w then return idle("no weather on the Hunt pad") end
+    if Summer.waitingStarfall() then return idle("waiting for Starfall weather (now " .. weatherName(w) .. ")") end
     if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
         if not Summer.partyActive() then memberKey = nil return end
         local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
@@ -1082,6 +1091,7 @@ if Tabs then
     if not LOBBY then hunt_box:AddLabel("Works in the lobby only (saved here).", true) end
     hunt_box:AddToggle("SummerMM", { Text = "Use Matchmaking", Tooltip = "Queues in Global Matchmaking instead of the solo pad; the hub types the game's captcha for you. Turning it on shows the Follow Teammates options.", Default = cfg.matchmaking, Callback = function(v) cfg.matchmaking = v Core.save_config() applyVis() end })
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather (this swaps your equipped units), joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
+    hunt_box:AddToggle("SummerStarfall", { Text = "Only Join on Starfall Weather", Tooltip = "The lobby waits (and does not count as stalled) until the Hunt pad shows Starfall, the weather where Star Golems drop Broken Stars. Pair it with Always Take Star Cards.", Default = cfg.onlyStarfall, Callback = function(v) cfg.onlyStarfall = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
     hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
     followT = hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "Only with Use Matchmaking on and no party: farms go down at once, the other units wait for the other players' damage units (or the wave below), then stand where theirs stand along the path. In a party or with friends your units place normally.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() applyVis() end })

@@ -307,7 +307,7 @@ if Tabs then
     local adv = Tabs.AutoPlay:AddRightTabbox()
     local a1 = adv:AddTab("Behavior")
     a1:AddToggle("AutoPlayOpening", { Text = "Smart Opening", Tooltip = "When your first unit is too expensive, place farm units first instead of waiting.", Default = cfg.opening, Callback = set("opening") })
-    a1:AddToggle("AutoPlayFuse", { Text = "Auto Fuse Vegito", Tooltip = "With Carrot (Ultra) and Vego (Mage II) both on the hotbar: upgrades them only to level 7, casts the fusion on the better one (stat potentials, level, relic), then upgrades the Fused Hero to its maximum.", Default = cfg.fuse, Callback = set("fuse") })
+    ;((Hub.Units and Hub.Units.box("vegito")) or a1):AddToggle("AutoPlayFuse", { Text = "Auto Fuse Vegito", Tooltip ="With Carrot (Ultra) and Vego (Mage II) both on the hotbar: upgrades them only to level 7, casts the fusion on the better one (stat potentials, level, relic), then upgrades the Fused Hero to its maximum.", Default = cfg.fuse, Callback = set("fuse") })
     a1:AddDropdown("AP_Method", { Text = "Upgrade Method", Tooltip = "Cheapest first = buys any upgrade it can afford, farm units first, then the cheapest (never waits on an expensive one). The others: Smart = most damage per yen, or hotbar order, your own order, or the lowest level first. Upgrade Cap always applies.", Values = METHODS, Default = cfg.method, Callback = set("method", function(v)
         if v ~= METHODS[4] then cfg.method_script = v end -- what Script mode in the Upgrade Order list returns to
         if AutoPlay.refreshLists then AutoPlay.refreshLists() end
@@ -1180,8 +1180,7 @@ end
 
 local function holds()
     local d = Hub.Gameplay and Hub.Gameplay.done
-    if d and (d.sell or d.leave) then return "units sold or leaving (Game tab)" end
-    return nil
+    if d and (d.sell or d.leave) then return "units sold or leaving (Game tab)" end    return nil
 end
 
 -- Next slot to place: wave reached, below its limit and cap, not blocked.
@@ -1354,6 +1353,7 @@ local function macroOwns()
     local mode, map = Hub.Macro.stageOf(level)
     return mode and m.stage and m.stage[mode] and m.stage[mode][map] ~= nil
 end
+function AutoPlay.macroOwns() return macroOwns() end -- read by Phoenix: it sells only when Auto Play will place him again
 
 ------------------------------------------------------------------ logging, snapshot, plan preview
 local dayLog = Core.paths.logs

@@ -75,6 +75,7 @@ local lastKey, lastChange, warned = nil, os.clock(), false
 
 local function lobbyCheck()
     if not summerOn() or Core.config.summer.role == "Member" then loadedAt = os.clock() stage = 0 return end -- a member waits for the host by design
+    if Hub.Summer and Hub.Summer.waitingStarfall and Hub.Summer.waitingStarfall() then loadedAt = os.clock() stage = 0 return end -- waiting for Starfall by choice
     local idle = (os.clock() - loadedAt) / 60
     if stage == 0 and idle >= cfg.lobby_min then
         stage = 1

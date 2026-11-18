@@ -96,6 +96,11 @@ if not ok then Hub.Core.log("ERROR ui:", err, "| running without a window (safe 
 ok, err = pcall(function() Hub.UIKit = Hub.require("uikit") end)
 if not ok then Hub.Core.log("ERROR uikit:", err) end
 
+-- Before Abilities, AutoPlay and Phoenix: their unit options live on the unit's page (Hub.Units.box).
+ok, err = xpcall(function() Hub.Units = Hub.require("units") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR units:", err) end
+if setthreadidentity then pcall(setthreadidentity, 8) end -- the game's unit picture code can leave this thread at a lower identity; every module after it would fail
+
 ok, err = pcall(function() Hub.RunLog = Hub.require("runlog") end)
 if not ok then Hub.Core.log("ERROR runlog:", err) end
 
@@ -130,6 +135,9 @@ if not ok then Hub.Core.log("ERROR abilities:", err) end
 
 ok, err = xpcall(function() Hub.AutoPlay = Hub.require("autoplay") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR autoplay:", err) end
+
+ok, err = xpcall(function() Hub.Phoenix = Hub.require("phoenix") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR phoenix:", err) end
 
 -- After AutoPlay: it adds a groupbox to the Auto Play tab and writes AutoPlay's learned-spot store.
 ok, err = xpcall(function() Hub.MapPicker = Hub.require("mappicker") end, debug.traceback)

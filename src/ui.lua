@@ -56,6 +56,7 @@ local Tabs = {
     Summer = Window:AddTab("Summer", "sun"),
     Dungeon = Window:AddTab("Dungeon", "skull"),
     Game = Window:AddTab("Game", "swords"),
+    Units = Window:AddTab("Units", "sparkles"),
     AutoPlay = Window:AddTab("Auto Play", "bot"),
     Misc = Window:AddTab("Misc", "ellipsis"),
     Info = Window:AddTab("Info", "info"),
