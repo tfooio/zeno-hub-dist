@@ -1,2 +1,2 @@
-7a95ef8 2026-11-20
-Map Picker: one spot per unit (all copies pack there), zoom and pan; Performance Mode keeps _terrain.terrain so placement works
+1f55f0a 2026-11-20
+Party farming: host forms the party before opening a portal, follower's end chain is empty, Follow joins portal pads; portal modifier skip, follower watchdog 2 min

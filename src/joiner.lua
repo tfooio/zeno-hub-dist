@@ -30,6 +30,7 @@ cfg.portal.min = cfg.portal.min or 1
 cfg.portal.max = cfg.portal.max or 5
 cfg.portal.highFrom = cfg.portal.highFrom or 6 -- tiers from here load the team of Portal Team (High Tier), when one is set
 if cfg.portal.lanes == nil then cfg.portal.lanes = true end
+cfg.portal.skip = cfg.portal.skip or {} -- modifier family -> true: portals carrying it are never opened (user, 2026-11-20: no High Cost portals)
 
 local Joiner = {}
 local function alive() return env.ZenoHub == Hub end
@@ -208,6 +209,15 @@ local function matchSession()
 end
 -- First selected portal in the inventory with tries left. In a match it must also pass the game's own replay check
 -- (same portal_group as the running one, tries left), so only that group's portals are offered.
+-- A portal's modifiers: unique_portal_data._ctl._levelmodifiers = { {id = "high_cost_3"}, ... } (read live 2026-11-20). The tier suffix is
+-- dropped so "High Cost" covers I to V.
+local function family(id) return (id:gsub("_%d+$", "")) end
+local function hasSkipped(p)
+    local ctl = p and p._ctl
+    for _, m in ctl and ctl._levelmodifiers or {} do
+        if cfg.portal.skip[family(m.id)] then return true end
+    end
+end
 local function pickPortal(inMatch)
     local want = cfg.portal.portals
     if not next(want) then return nil, "no portal selected" end
@@ -218,6 +228,7 @@ local function pickPortal(inMatch)
     for _, it in (pd and pd.inventory.unique_items) or {} do
         local d, u = Items[it.item_id], it._unique_item_data
         if d and want[d.name] and (not u or (u._portal_tries or 0) < (u._portal_max_tries or 1))
+            and not hasSkipped(u and u._unique_portal_data)
             and (not inMatch or LSC.is_valid_replay_portal_item(s, it.uuid)) then
             local depth = u and u._unique_portal_data and u._unique_portal_data.portal_depth or 0
             if depth == 0 or (depth >= cfg.portal.min and depth <= cfg.portal.max) then
@@ -350,6 +361,7 @@ local function try(mode)
             -- user, 2026-11-04: the Summer team does not clear tier 8, so a tiered portal from cfg.portal.highFrom up loads its own team (Portal Team (High Tier)).
             equipTeam(mode, (plan.depth or 0) >= cfg.portal.highFrom and cfg.team.portal_high or nil)
             Core.log("joiner", mode, plan.name, plan.depth and plan.depth > 0 and ("tier " .. plan.depth) or "")
+            if Hub.Party then pcall(Hub.Party.prepare) end
             Game.invoke("use_portal", plan.portal, { friends_only = true })
             -- 15 s: a pad that shows up late must not lead to a second use_portal (4 "portal not opened" in the logs, each followed by another call 3 s later)
             for _ = 1, 60 do pad = ownPortalPad() if pad then break end task.wait(0.25) end
@@ -514,6 +526,21 @@ if Tabs then
     portal:AddDropdown("JoinPortalOrder", { Text = "Portal Tier Order", Tooltip = "Tiered portals (Sky Portal) are opened lowest or highest tier first. Portals without a tier, like the secret Explosion Mage's Portal, always come first.", Values = { "Lowest Tier First", "Highest Tier First" }, Default = cfg.portal.order, Callback = set(cfg.portal, "order") })
     portal:AddSlider("JoinPortalMin", { Text = "Lowest Tier", Tooltip = "Tiered portals below this tier are skipped.", Default = cfg.portal.min, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "min") })
     portal:AddSlider("JoinPortalMax", { Text = "Highest Tier", Tooltip = "Tiered portals above this tier are skipped. Tier 3 / 4 / 5 / 6 / 8 Sky Portals have a difficulty scale of about 6 / 12 / 18 / 48 / 116.", Default = cfg.portal.max, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "max") })
+    -- One entry per modifier family (High Cost covers I to V), labelled with the tier I name from the game data.
+    local famLabel, labels = {}, {}
+    for id, m in Game.data("LevelModifiers") do
+        if type(m) == "table" and m.name and family(id) == id then famLabel[id] = m.name table.insert(labels, m.name) end
+    end
+    table.sort(labels)
+    local labelFam = {}
+    for f, l in famLabel do labelFam[l] = f end
+    local skipDefault = {}
+    for f in cfg.portal.skip do if famLabel[f] then table.insert(skipDefault, famLabel[f]) end end
+    portal:AddDropdown("JoinPortalSkip", { Text = "Ignore Modifiers", Tooltip = "Portals carrying any of these modifiers (any tier, so High Cost skips I to V) are never opened or picked as the next portal.", Values = labels, Multi = true, Default = skipDefault, Callback = function(v)
+        cfg.portal.skip = {}
+        for l, on in v do if on and labelFam[l] then cfg.portal.skip[labelFam[l]] = true end end
+        Core.save_config()
+    end })
     portal:AddSlider("JoinPortalHighFrom", { Text = "High Tier Team From", Tooltip = "Tiered portals at or above this tier load Portal Team (High Tier) from the Team Equipper box (the Vegito team, say). Below it the normal Portal Team, or your hotbar, is used.", Default = cfg.portal.highFrom, Min = 1, Max = 12, Rounding = 0, Callback = set(cfg.portal, "highFrom") })
 
     local daily = T:AddRightGroupbox("Daily Challenge Joiner", "calendar")

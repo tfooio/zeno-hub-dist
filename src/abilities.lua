@@ -16,9 +16,9 @@ local Abilities = {}
 local function alive() return env.ZenoHub == Hub end
 
 -- The units a smart rule is built for, in dropdown order, and the rule each uses.
-local SMART_ORDER = { "erwin", "wendy", "leafa_evolved", "kisuke_evolved", "homura_evolved", "rukia_bankai_evolved" }
+local SMART_ORDER = { "erwin", "wendy", "leafa_evolved", "kisuke_evolved", "homura_evolved", "rukia_bankai_evolved", "megumin_evolved" }
 local SMART = { erwin = "Buff chain", wendy = "Buff chain", leafa_evolved = "Buff chain", kisuke_evolved = "Buff cover", homura_evolved = "Rotation (spaced)",
-    rukia_bankai_evolved = "Meter rotation" }
+    rukia_bankai_evolved = "Meter rotation", megumin_evolved = "Nuke at spot" }
 -- First load of this option: select all of them, which is what the old single toggle did for these units.
 if cfg.smart_units == nil then
     cfg.smart_units = {}
@@ -29,6 +29,11 @@ end
 if not cfg.smart_v2 then
     if not cfg.smart then cfg.smart_units = {} end
     cfg.smart, cfg.smart_v2 = true, true
+    Core.save_config()
+end
+-- Explosion Mage's nuke is on from the start (the toggle on her page turns it off); saved configs predate her.
+if not cfg.nuke_v1 then
+    cfg.smart_units.megumin_evolved, cfg.nuke_v1 = true, true
     Core.save_config()
 end
 -- Summer Hunt started by Auto Summer Hunt: its own settings (src/summer.lua), the saved ones are not read or written.
@@ -464,9 +469,52 @@ local function runMeter(units)
     end
 end
 
+-- Nuke at spot (Explosion Mage (Archdemon), megumin_evolved): her active only picks the spot she attacks (user, 2026-11-20: it is used immediately and the
+-- spot stays until it is changed). The game's client clamps the pick to her range around her `formation_goal` (Y = the ground there) and calls
+-- `use_active_attack(unit, { aoe_point = Vector3 })` (PlacementServiceClient._on_select_spot, AttacksCustomService _pick_aoe_point). Smart sends that call
+-- with the spot at her own feet (distance 0, always in range) the moment she is placed and again every time it is off cooldown; no enemy check.
+-- UNVERIFIED live: nobody on the team owns her, and her attack data (`megumin:*`) is not on the client (not in Data.Attacks), so the ability's unlock
+-- level and the server's checks are unknown.
+local NUKE_ID = "megumin_evolved"
+local nukeAt, nukeOk, nukeFails = {}, {}, {} -- model -> os.clock() of the last try / accepted count / refused count (logging is capped)
+local UnitCore
+local function nukeSpot(u)
+    UnitCore = UnitCore or Game.loader().load_core_service(script, "UnitServiceCore")
+    local fg = u._stats:FindFirstChild("formation_goal")
+    local goal = fg and fg.Value or u:GetPivot()
+    return Vector3.new(goal.Position.X, UnitCore.get_ground(u, goal).Y, goal.Position.Z)
+end
+local function runNuke()
+    for _, u in workspace._UNITS:GetChildren() do
+        local st = u:FindFirstChild("_stats")
+        local owner = st and st:FindFirstChild("player")
+        if owner and owner.Value == LP and st:FindFirstChild("id") and st.id.Value == NUKE_ID
+            and os.clock() - (nukeAt[u] or -99) >= 5 and ready(u) then
+            nukeAt[u] = os.clock()
+            local ok, spot = pcall(nukeSpot, u)
+            local res = spot
+            if ok then ok, res = pcall(Game.invoke, "use_active_attack", u, { aoe_point = spot }) end
+            if ok and res == true then
+                nukeOk[u] = (nukeOk[u] or 0) + 1
+                if nukeOk[u] <= 3 then
+                    Core.log("ability", NUKE_ID, "spot", tostring(spot), "-> true")
+                    task.delay(1, function() Core.log("ability", NUKE_ID, "server spot after 1 s:", tostring(u:GetAttribute("_aoe_point"))) end)
+                end
+            else
+                nukeFails[u] = (nukeFails[u] or 0) + 1
+                if nukeFails[u] <= 3 then Core.log("ability", NUKE_ID, "spot refused:", tostring(spot), "->", tostring(res)) end
+            end
+        end
+    end
+end
+
 -- One pass over our units. The whole pass is protected: an error outside the per-unit pcall used to end
 -- this loop for the rest of the match with nothing logged (Elfy never cast, 2026-10-25).
 local function pass()
+    if smartOn(NUKE_ID) then -- own scan: mine() only lists units whose active_attack stat is set, which is unknown for her
+        local ok, err = pcall(runNuke)
+        if not ok then Core.log("ERROR ability nuke", err) end
+    end
     local byId = {}
     for _, u in mine() do
         local id = u._stats.id.Value
@@ -475,6 +523,7 @@ local function pass()
     end
     for id, units in byId do
         local ok, err = pcall(function()
+            if id == NUKE_ID then return end -- only the nuke rule casts her: a cast without a spot is refused
             if smartOn(id) then
                 local rule = SMART[id]
                 if rule == "Buff chain" then runChain(id, units)

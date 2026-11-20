@@ -97,7 +97,7 @@ end
 -- (they are kept: the lobby opens them too). A seamless replay drops GameFinished and resets this.
 local function unattended()
     if summerOn() then return Core.config.summer.role ~= "Member" end -- a member follows the host
-    if Core.config.party and Core.config.party.follow then return false end
+    if Core.config.party and Core.config.party.follow then return true end -- a follower gets 2 min for the host's pick (below)
     for _, m in Core.config.joiner or {} do
         if type(m) == "table" and m.enable then return true end
     end
@@ -109,7 +109,8 @@ local function endScreenCheck()
     local fin = data and data:FindFirstChild("GameFinished")
     if not (fin and fin.Value and unattended()) then finAt, finStage = nil, 0 return end
     finAt = finAt or os.clock()
-    local limit = (Hub.Dungeon and Hub.Dungeon.owns_finish() and 10 or 3) * 60
+    local following = Core.config.party and Core.config.party.follow
+    local limit = (Hub.Dungeon and Hub.Dungeon.owns_finish() and 10 or following and 2 or 3) * 60
     local up = os.clock() - finAt
     if finStage == 0 and up >= limit then
         finStage = 1

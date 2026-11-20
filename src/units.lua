@@ -21,6 +21,7 @@ local ENTRIES = {
     { id = "kisuke_evolved", tag = "Team buff", text = "Buffs every unit for 30 s: +20% range, 10% faster attacks. Smart casts a copy as soon as the buff ends." },
     { id = "homura_evolved", tag = "Time stop", text = "Stops time. Smart takes turns between copies while enemies are in range." },
     { id = "rukia_bankai_evolved", tag = "Freeze meter", text = "Freezes enemies while on, until her meter runs out. Smart keeps one copy on at a time." },
+    { id = "megumin_evolved", tag = "Nuke", text = "Picks where she attacks. Smart sets it to her own spot as soon as she is placed, and again whenever it is off cooldown." },
     { id = "vegito", look = "goku_ssj3_evolved", title = "Vegito (Fusion)", tag = "Fusion", status = "Made in a match by fusing Carrot and Vego", text = "Fuses Carrot and Vego. Auto Fuse upgrades them to 7, fuses the better one, then upgrades Vegito to max." },
     { id = "marco_evolved", tag = "Reincarnation", text = "Sells units when one of them reaches max level." },
 }

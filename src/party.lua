@@ -62,7 +62,8 @@ local function follow()
     for _, pad in all do if members(pad)[LP] then return end end -- already on a pad
     for _, host in listed() do
         for _, pad in all do
-            if flag(pad, "Owner") == host and flag(pad, "Locked") == false and not flag(pad, "Teleporting") then
+            -- Portal pads come ready from use_portal (PortalReady) and may never show Locked = false (UNVERIFIED live).
+            if flag(pad, "Owner") == host and (flag(pad, "Locked") == false or flag(pad, "PortalReady") == true) and not flag(pad, "Teleporting") then
                 local ret = Game.invoke("request_join_lobby", pad.Name)
                 Core.log("party: join", host.Name, pad.Name, tostring(ret))
                 if ret ~= true then retryAt = os.clock() + 5 end
@@ -114,6 +115,9 @@ function Party.fill(limit)
     return false
 end
 
+-- Host Mode: the joiner calls this before it opens a pad, so the members are in the party (and get pulled onto the pad). Instant when they already are.
+function Party.prepare() if cfg.host then Party.fill(cfg.wait) end end
+
 -- Member side: accept an invite that comes from a listed player.
 local function acceptInvites()
     local ok, ui = pcall(function() return Game.loader().load_client_service(script, "GUIService").party_ui end)
@@ -138,6 +142,7 @@ function Party.wait_for_party(pad)
     local limit = math.min(cfg.wait, math.max(0, (flag(pad, "Timer") or 0) - 3))
     local t = os.clock()
     while alive() and os.clock() - t < limit do
+        invite() -- a broken party re-forms here (throttled to one invite per player per 20 s); the member accepts with Auto Accept Party Invite
         local m, all = members(pad), true
         for _, p in want do if not m[p] then all = false end end
         if all then Core.log("party: everyone is on the pad, starting", pad.Name) return true end
