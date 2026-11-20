@@ -1,6 +1,6 @@
--- Map Picker (Auto Play tab): click the spots of the six hotbar slots on a map drawn from our own snapshots (Data/autoplay_maps).
--- Saves into the per-map spot store Auto Play reads (key names from the removed Learn Placements), cfg.learned[map][unit id] = { {x, y, z}, ... } (the n-th copy of a unit takes the n-th spot;
--- the spots belong to the unit, not to the hotbar slot, so they follow it into any slot or team),
+-- Map Picker (Auto Play tab): click one spot per hotbar unit on a map drawn from our own snapshots (Data/autoplay_maps).
+-- Saves into the per-map spot store Auto Play reads (key names from the removed Learn Placements), cfg.learned[map][unit id] = { {x, y, z} } (one spot; Auto Play packs every copy of the unit around it;
+-- the spot belongs to the unit, not to the hotbar slot, so it follows the unit into any slot or team),
 -- so Auto Play needs no new option. Y is saved as 0: Auto Play looks the ground height up when it places. docs/features/map-picker.md
 local Hub = ...
 local Core, Game = Hub.Core, Hub.Game
@@ -11,8 +11,8 @@ local lib = Hub.UI.Library
 local S = lib.Scheme
 local HttpService = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
+local UIS = game:GetService("UserInputService")
 
-local MAX_SPOTS = 10 -- the Place Cap slider's maximum
 local SNAP = 6 -- studs: a click takes the nearest valid cell within this
 local N = 80 -- plot resolution: cells are merged into an N x N grid so a big map stays a few thousand frames
 local DIR = Core.paths.data .. "/autoplay_maps"
@@ -71,6 +71,7 @@ local function loadMap(id)
 end
 
 ------------------------------------------------------------------ state
+local view = { z = 1, u = 0.5, v = 0.5 } -- zoom factor and the map point (0..1) at the plot centre
 local map, sel = nil, 1 -- sel = the hotbar slot the buttons edit; the data belongs to the unit standing in it
 local ui = {}
 local function unitOf(slot) -- unit id of hotbar slot `slot` (nil = empty)
@@ -103,13 +104,13 @@ local function paintStatus()
         return
     end
     local total = 0
-    for _, l in cfg.learned[map.key] or {} do total += #l end
+    for _, l in cfg.learned[map.key] or {} do if #l > 0 then total += 1 end end
     local name = slotName(sel)
     local text
     if unitOf(sel) then
-        text = ("%s | Slot %d %s: %d spot%s | all units on this map: %d"):format(label(map.id), sel, name or "", count(sel), count(sel) == 1 and "" or "s", total)
+        text = ("%s | Slot %d %s: %s | units with a spot on this map: %d"):format(label(map.id), sel, name or "", count(sel) > 0 and "spot set" or "no spot", total)
     else
-        text = ("%s | Slot %d is empty | all units on this map: %d"):format(label(map.id), sel, total)
+        text = ("%s | Slot %d is empty | units with a spot on this map: %d"):format(label(map.id), sel, total)
     end
     if map.v < 2 then
         text ..= " | old scan (28 studs around the route, no details): play this map, or press Rescan in a match on it"
@@ -123,7 +124,7 @@ end
 local function paintSlots()
     for i, b in ui.slotBtn or {} do
         local n = count(i)
-        b.btn.Text = n > 0 and ("%d: %d"):format(i, n) or tostring(i)
+        b.btn.Text = n > 0 and ("%d \u{2022}"):format(i) or tostring(i)
         b.btn.BackgroundTransparency = unitOf(i) and 0 or 0.65
         b.line.Color = i == sel and S.AccentColor or S.OutlineColor
         b.line.Thickness = i == sel and 3 or 1
@@ -141,24 +142,25 @@ local function paintSpots()
         if id and not drawn[id] then
             drawn[id] = true
             local on = id == selId
-            for _, p in spotsOf(id) do
+            local p = spotsOf(id)[1]
+            if p then
+                local sz = on and 16 or 13 -- fixed pixels: the marker stays small however far the map is zoomed
                 local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5 + (p[1] - map.cx) / map.side, 0.5 + (p[3] - map.cz) / map.side),
-                    Size = UDim2.fromScale(0.06, 0.06), BackgroundColor3 = COLORS[slot], BorderSizePixel = 0, ZIndex = on and 30 or 20 }, ui.spotLayer)
+                    Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = COLORS[slot], BorderSizePixel = 0, ZIndex = on and 30 or 20 }, ui.spotLayer)
                 new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
-                new("UIAspectRatioConstraint", {}, dot)
                 new("UIStroke", { Color = on and Color3.new(1, 1, 1) or Color3.new(0, 0, 0), Thickness = on and 2 or 1 }, dot)
-                new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Text = tostring(slot), TextColor3 = Color3.new(0, 0, 0), TextScaled = true,
+                new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Text = tostring(slot), TextColor3 = Color3.new(0, 0, 0), TextSize = 10,
                     FontFace = S.Font, ZIndex = 31 }, dot)
             end
         end
     end
     for id, list in cfg.learned[map.key] or {} do
         if not drawn[id] then
-            for _, p in list do
+            local p = list[1]
+            if p then
                 local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5 + (p[1] - map.cx) / map.side, 0.5 + (p[3] - map.cz) / map.side),
-                    Size = UDim2.fromScale(0.035, 0.035), BackgroundColor3 = Color3.fromRGB(150, 150, 165), BackgroundTransparency = 0.35, BorderSizePixel = 0, ZIndex = 15 }, ui.spotLayer)
+                    Size = UDim2.fromOffset(7, 7), BackgroundColor3 = Color3.fromRGB(150, 150, 165), BackgroundTransparency = 0.35, BorderSizePixel = 0, ZIndex = 15 }, ui.spotLayer)
                 new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
-                new("UIAspectRatioConstraint", {}, dot)
             end
         end
     end
@@ -219,6 +221,8 @@ end
 
 local function select(id)
     map = id and loadMap(id) or nil
+    view.u, view.v = 0.5, 0.5
+    ui.applyView()
     if id and not map then lib:Notify("Could not read the snapshot of " .. id) end
     build()
 end
@@ -242,7 +246,7 @@ local function nearestCell(x, z)
     return best
 end
 
--- Click a free cell: the next copy of the selected slot's unit goes there. Click a spot of that unit again: it is removed.
+-- Click a cell: it becomes the selected unit's spot (Auto Play packs every copy around it). Click that spot again: it is removed.
 local function clickAt(x, z)
     if not map then return end
     local id = unitOf(sel)
@@ -250,15 +254,14 @@ local function clickAt(x, z)
     local c = nearestCell(x, z)
     if not c then return lib:Notify("No placeable ground there") end
     local list = spotsOf(id, true)
-    for i, p in list do
-        if math.abs(p[1] - c[1]) < 1 and math.abs(p[3] - c[2]) < 1 then
-            table.remove(list, i)
-            Core.save_config()
-            return refresh()
-        end
+    local old = list[1]
+    local same = old and math.abs(old[1] - c[1]) < 1 and math.abs(old[3] - c[2]) < 1
+    table.clear(list) -- one spot per unit (older saves held several: the first was the one that mattered)
+    if same then
+        Core.save_config()
+        return refresh()
     end
-    if #list >= MAX_SPOTS then return lib:Notify(("This unit already has %d spots"):format(MAX_SPOTS)) end
-    table.insert(list, { c[1], 0, c[2] })
+    list[1] = { c[1], 0, c[2] }
     Core.save_config()
     if cfg.use_learned == false then lib:Notify("Use Map Picker Spots is off: Auto Play ignores these spots until you turn it on (Advanced > Position).") end
     refresh()
@@ -273,7 +276,7 @@ do
 end
 ui.drop = box:AddDropdown("MP_Map", { Text = "Map", Tooltip = "Maps this machine has saved (each one the first time Auto Play ran on it). Spots are per map, every mode that uses the map shares them.",
     Values = labels, Default = startId and idLabel[startId] or nil, Callback = function(v) select(byLabel[v]) end })
-box:AddLabel("Pick a unit, then click the map to add its next spot. Click a spot again to remove it. Grey dots are other units' spots.", true)
+box:AddLabel("Pick a unit, then click the map once: all its copies are placed there. Click the spot again to remove it. Zoom in for precision and drag to move the map. Grey dots are other units' spots.", true)
 
 local slotRow = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
 new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center }, slotRow)
@@ -294,31 +297,58 @@ local plot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim
 new("UIAspectRatioConstraint", { AspectType = Enum.AspectType.FitWithinMaxSize, DominantAxis = Enum.DominantAxis.Width }, plot)
 new("UICorner", { CornerRadius = UDim.new(0, 8) }, plot)
 new("UIStroke", { Color = S.OutlineColor, Thickness = 1 }, plot)
-ui.cellLayer = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 1 }, plot)
-ui.laneLayer = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 2 }, plot)
-ui.spotLayer = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 20 }, plot)
+-- The three layers sit in one frame that is `view.z` times the plot and slid so the view centre stays in the middle (zoom and pan cost no redraw).
+local world = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, plot)
+ui.cellLayer = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 1 }, world)
+ui.laneLayer = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 2 }, world)
+ui.spotLayer = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 20 }, world)
+function ui.applyView()
+    local z = view.z
+    view.u, view.v = math.clamp(view.u, 0.5 / z, 1 - 0.5 / z), math.clamp(view.v, 0.5 / z, 1 - 0.5 / z)
+    world.Size = UDim2.fromScale(z, z)
+    world.Position = UDim2.fromScale(0.5 - view.u * z, 0.5 - view.v * z)
+end
 local hit = new("TextButton", { BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Size = UDim2.fromScale(1, 1), ZIndex = 100 }, plot)
-hit.InputBegan:Connect(function(input)
-    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-    if not map then return end
-    -- input.Position leaves out the top bar; a ScreenGui that ignores the inset measures from the very top
+local function isPress(input) return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch end
+-- input.Position leaves out the top bar; a ScreenGui that ignores the inset measures from the very top
+local function guiPos(input)
     local pos = Vector2.new(input.Position.X, input.Position.Y)
     local sg = hit:FindFirstAncestorWhichIsA("ScreenGui")
     if sg and sg.IgnoreGuiInset then pos += GuiService:GetGuiInset() end
+    return pos
+end
+-- Press and release without moving = a click; moving more than 5 px = pan the map.
+local drag
+hit.InputBegan:Connect(function(input)
+    if not map or not isPress(input) then return end
+    drag = { pos = guiPos(input), u = view.u, v = view.v, moved = false }
+end)
+hit.InputChanged:Connect(function(input)
+    if not drag or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement and not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then drag = nil return end
+    local d, s = guiPos(input) - drag.pos, hit.AbsoluteSize
+    if not drag.moved and d.Magnitude < 5 then return end
+    drag.moved = true
+    view.u, view.v = drag.u - d.X / (s.X * view.z), drag.v - d.Y / (s.Y * view.z)
+    ui.applyView()
+end)
+hit.InputEnded:Connect(function(input)
+    if not drag or not isPress(input) then return end
+    local d = drag
+    drag = nil
+    if d.moved or not map then return end
     local a, s = hit.AbsolutePosition, hit.AbsoluteSize
     if s.X <= 0 or s.Y <= 0 then return end
-    local ok, err = pcall(clickAt, map.cx + ((pos.X - a.X) / s.X - 0.5) * map.side, map.cz + ((pos.Y - a.Y) / s.Y - 0.5) * map.side)
+    local u, v = view.u + ((d.pos.X - a.X) / s.X - 0.5) / view.z, view.v + ((d.pos.Y - a.Y) / s.Y - 0.5) / view.z
+    local ok, err = pcall(clickAt, map.cx + (u - 0.5) * map.side, map.cz + (v - 0.5) * map.side)
     if not ok then Core.log("ERROR mappicker click:", err) end
 end)
 box:AddUIPassthrough("MP_Plot", { Instance = holder, Height = 340 })
+box:AddSlider("MP_Zoom", { Text = "Zoom", Tooltip = "Zoom the map; drag it to move around.", Default = 1, Min = 1, Max = 10, Rounding = 1, Suffix = "x", Callback = function(v) view.z = v ui.applyView() end })
 ui.status = box:AddLabel("-", true)
 box:AddLabel("Colours: green = ground any unit can stand on (the game's own placement rule), brown = hill ground (hill units), purple = ground hidden under scenery (not usable), dark = nothing placeable found, or outside the scan (48 studs around the route). White dots = the enemy route, S = spawn, B = your base.", true)
 
-box:AddButton({ Text = "Undo Last Spot (this unit)", Func = function()
-    local list = spotsOf(unitOf(sel))
-    if #list > 0 then table.remove(list) Core.save_config() refresh() end
-end })
-box:AddButton({ Text = "Clear This Unit's Spots", Func = function()
+box:AddButton({ Text = "Clear This Unit's Spot", Func = function()
     local id = unitOf(sel)
     if map and id and cfg.learned[map.key] then cfg.learned[map.key][id] = nil Core.save_config() refresh() end
 end })

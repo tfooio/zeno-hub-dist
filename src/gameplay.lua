@@ -50,8 +50,9 @@ local function mapDecor()
     for _, c in map and map:GetChildren() or {} do
         if c.Name ~= "obstacles" then table.insert(list, c) end
     end
+    -- The folder itself must stay: the game's placement raycast indexes workspace._terrain.terrain, so a missing folder makes every click placement error.
     local deco = terr and terr:FindFirstChild("terrain")
-    if deco then table.insert(list, deco) end
+    for _, c in deco and deco:GetChildren() or {} do table.insert(list, c) end
     return list
 end
 local MATCH = Hub.mode == "match" -- every Performance option is match-only: the lobby world holds the pads and NPCs

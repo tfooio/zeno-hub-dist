@@ -1,2 +1,2 @@
-36c5ae7 2026-11-17
-Units tab: one-sentence ability descriptions
+7a95ef8 2026-11-20
+Map Picker: one spot per unit (all copies pack there), zoom and pan; Performance Mode keeps _terrain.terrain so placement works

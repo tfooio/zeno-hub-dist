@@ -318,7 +318,7 @@ if Tabs then
     a2:AddSlider("AP_Gap", { Text = "Space Between Units", Tooltip = "Extra studs left between units (they only need to not touch).", Default = cfg.margin, Min = 0, Max = 6, Rounding = 1, Callback = set("margin") })
     a2:AddToggle("AP_Pack", { Text = "Pack Units Tight", Tooltip = "Needs Place Anywhere on (Game tab). Units stand 1 stud apart around the path point and may stand on the road. Off: hitboxes must not touch, the road is avoided, Space Between Units applies.", Default = cfg.pack, Callback = set("pack") })
     -- The Map Picker's spots (Map Picker box, saved per map); the key AutoPlayUseLearned is the old name, kept so saved configs still match.
-    a2:AddToggle("AutoPlayUseLearned", { Text = "Use Map Picker Spots", Tooltip = "Units are placed on the spots you picked in the Map Picker box first; the usual placing fills the rest. Off = the Map Picker's spots are ignored.", Default = cfg.use_learned, Callback = set("use_learned") })
+    a2:AddToggle("AutoPlayUseLearned", { Text = "Use Map Picker Spots", Tooltip = "Each unit is placed at the spot you picked for it in the Map Picker. Units without a spot use the usual placing.", Default = cfg.use_learned, Callback = set("use_learned") })
     ui.kind = a2:AddDropdown("AP_Kind", { Text = "Center Units On", Tooltip = "The enemy path (automatic), or a position you saved for this stage.", Values = KINDS, Default = KINDS[1], Callback = function(v)
         cfg.kind[stageKey()] = v ~= KINDS[1] and v or nil
         Core.save_config()
@@ -856,7 +856,7 @@ end
 -- hills within Hill Percentage; `boost` widens both radii when nothing in the pass before passed the hitbox check. Candidates are
 -- ordered by the square spiral around the origin (the origin cell first), the same origin for every unit, so the first free cell
 -- in spiral order wins and the units grow outward in a packed square.
-local function rank(slot, h, placed, center, around, boost)
+local function rank(slot, h, placed, center, around, boost, picked)
     local def = h.def
     local R0 = plannedRange(slot, h)
     if roleOf(def) == "farm" then -- money units do not attack: use the longest range in the lineup so they stand with the others
@@ -929,8 +929,8 @@ local function rank(slot, h, placed, center, around, boost)
     end
     -- Soaring enemies only take damage from units standing on a hill (game text, and `_on_hill` in its targeting code): a hybrid unit that attacks takes a hill
     -- spot whenever one is a candidate (ground spots stay as the fallback, and the buffer reach filter below does not drop hill spots).
-    local hillFirst = cfg.hybrid_hill and def.hybrid_placement and not def.hill_unit and roleOf(def) ~= "buffer" and roleOf(def) ~= "farm"
-    if #anchors > 0 and #out > 0 and not hasCopy then -- later copies follow their first copy (it was placed inside the reach)
+    local hillFirst = not picked and cfg.hybrid_hill and def.hybrid_placement and not def.hill_unit and roleOf(def) ~= "buffer" and roleOf(def) ~= "farm"
+    if #anchors > 0 and #out > 0 and not hasCopy and not picked then -- a picked spot is the user's choice, not filtered -- later copies follow their first copy (it was placed inside the reach)
         local best = 0
         for _, c in out do
             local n = 0
@@ -971,8 +971,29 @@ local function spotFree(c, h, virtual)
     return true
 end
 
--- Where a slot's units are centered: slot position, Middle Position (cluster tightly when the type says so), else the path point.
-local function centerFor(slot)
+-- The unit's Map Picker spot (one per unit and map): its copies pack around it. Y is saved as 0, so the ground height comes from the route point nearest to it.
+local function pickedSpot(h)
+    local l = cfg.use_learned and cfg.learned[mapKey()]
+    local p = l and l[tostring(h.id)] and l[tostring(h.id)][1]
+    if not p then return nil end
+    local y0, near = p[2], math.huge
+    if y0 == 0 then
+        for _, ln in lanes do
+            for i = 1, #ln.samples, 4 do
+                local q = ln.samples[i].p
+                local d = (q.X - p[1]) ^ 2 + (q.Z - p[3]) ^ 2
+                if d < near then near, y0 = d, q.Y end
+            end
+        end
+    end
+    local g = cell(math.floor(p[1] / STEP + 0.5), math.floor(p[3] / STEP + 0.5), y0)
+    return g and Vector3.new(p[1], g.pos.Y, p[3]) or nil -- no ground there: the spot is skipped
+end
+
+-- Where a slot's units are centered: the unit's picked spot, slot position, Middle Position (cluster tightly when the type says so), else the path point.
+local function centerFor(slot, h)
+    local picked = h and pickedSpot(h)
+    if picked then return picked, true, true end
     local key = stageKey()
     local sp = cfg.slotpos[key] and cfg.slotpos[key][tostring(slot)]
     local mid = cfg.mid[key]
@@ -993,45 +1014,19 @@ table.insert(Hub.connections, game.ReplicatedStorage:WaitForChild("endpoints"):W
     lastMsg, lastMsgAt = tostring(text), os.clock()
 end))
 
-local function learnedSpot(unitId, nth)
-    local l = cfg.learned[mapKey()]
-    local list = l and l[tostring(unitId)]
-    local p = list and list[nth]
-    return p and Vector3.new(p[1], p[2], p[3])
-end
-
-AutoPlay.learnedSpot, AutoPlay.mapKey = learnedSpot, mapKey -- exposed for checks from the executor
+AutoPlay.pickedSpot, AutoPlay.mapKey = pickedSpot, mapKey -- exposed for checks from the executor
 local logLine
 -- One placement for a hotbar slot. Returns true, or false and a reason.
 local slotBlock = {} -- slot -> os.clock() until which the slot is not tried again
 local noSpot = {} -- slot -> "no spot" results in a row this match (the retry wait doubles)
 local BOOSTS = { 1, 2, 4, 100 }
 local function place(slot, h, units, live)
-    local center, around = centerFor(slot)
+    local center, around, picked = centerFor(slot, h) -- picked: every copy of the unit packs around its Map Picker spot
     if not center then return false, "no position" end
     local placed = placedList(units)
     local list, checked, tries = {}, 0, 0
     for _, boost in BOOSTS do -- wider search when nothing in the pass before passed the hitbox check
-    list = rank(slot, h, placed, center, around, boost)
-    local nth = 1 -- spots belong to the unit: its n-th copy on the field takes the n-th spot, whatever slot or team it is in
-    for _, u in units do if u._stats.id.Value == h.id then nth += 1 end end
-    local lp = cfg.use_learned and learnedSpot(h.id, nth)
-    if lp and lp.Y == 0 then -- picked on the Map Picker (no height saved): take the ground height from the route point nearest to it
-        local y0, near = 0, math.huge
-        for _, l in lanes do
-            for i = 1, #l.samples, 4 do
-                local q = l.samples[i].p
-                local d = (q.X - lp.X) ^ 2 + (q.Z - lp.Z) ^ 2
-                if d < near then near, y0 = d, q.Y end
-            end
-        end
-        local g = cell(math.floor(lp.X / STEP + 0.5), math.floor(lp.Z / STEP + 0.5), y0)
-        lp = g and Vector3.new(lp.X, g.pos.Y, lp.Z) or nil -- no ground there: skip the spot, the usual placing goes on
-    end
-    if lp then
-        local c = cell(math.floor(lp.X / STEP + 0.5), math.floor(lp.Z / STEP + 0.5), lp.Y)
-        table.insert(list, 1, { pos = lp, score = 1e9, cls = c and c.cls or "?", key = math.floor(lp.X / STEP + 0.5) * 100003 + math.floor(lp.Z / STEP + 0.5), learned = true })
-    end
+    list = rank(slot, h, placed, center, around, boost, picked)
     checked, tries = 0, 0
     local silentRun = 0
     for _, c in list do
@@ -1067,7 +1062,7 @@ local function place(slot, h, units, live)
             task.spawn(learnPaid, moneyBefore, h.def.cost * modifier("player_cost_scale"))
             if Hub.Misc and Hub.Misc.walkTo then Hub.Misc.walkTo(c.pos) end -- Misc > Walk To Units
             table.insert(recent, { pos = c.pos, r = hitR(h.def), t = os.clock() })
-            logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, c.learned and " picked" or "", tag))
+            logLine(("place slot %d %s %s at (%.1f, %.1f) score %.0f try %d checked %d wave %s money %.0f%s%s"):format(slot, h.id, c.cls, c.pos.X, c.pos.Z, c.score, tries, checked, tostring(workspace._wave_num.Value), LP._stats.resource.Value, picked and " picked" or "", tag))
             task.delay(1, function()
                 -- tag the model (Hill Percentage share) and set the target priority
                 for _, u in myUnits() do
@@ -1456,7 +1451,7 @@ local function planSpots(units)
     planInfo = nil
     do
         local first = list[1]
-        local origin = first and centerFor(first.slot)
+        local origin = first and centerFor(first.slot, first.h)
         local R0 = 0
         for sl, hh in hb do if not isFarm(hh.def) then R0 = math.max(R0, plannedRange(sl, hh)) end end
         if R0 == 0 then R0 = 20 end
@@ -1466,12 +1461,12 @@ local function planSpots(units)
         local lim = cfg.limit[e.slot]
         local cap = lim > 0 and math.min(lim, placementCap(e.h)) or placementCap(e.h)
         for _ = (count[e.h.uuid] or 0) + 1, cap do
-            local center, around = centerFor(e.slot)
+            local center, around, picked = centerFor(e.slot, e.h)
             if not center then break end
             local pl = placedList(units, virtual)
             local found
             for _, boost in BOOSTS do
-                local ranked = rank(e.slot, e.h, pl, center, around, boost)
+                local ranked = rank(e.slot, e.h, pl, center, around, boost, picked)
                 for i = 1, math.min(#ranked, 300) do
                     if spotFree(ranked[i], e.h, pl) then found = ranked[i] break end
                 end
