@@ -279,6 +279,26 @@ function Webhook.embed(rec)
     local fields = {}
     if #rewards > 0 then table.insert(fields, { name = "Rewards", value = table.concat(rewards, "\n"), inline = false }) end
     if #drops > 0 then table.insert(fields, { name = "Drops", value = table.concat(drops, "\n"):sub(1, 1000), inline = false }) end
+    local p, dg = rec.portal, rec.dungeon
+    local function bits(...) -- the arguments that are not nil, joined; table.concat would stop at a hole
+        local out = {}
+        for i = 1, select("#", ...) do local v = select(i, ...) if v then table.insert(out, v) end end
+        return table.concat(out, "  ·  ")
+    end
+    if type(p) == "table" then
+        local mods = p.modifiers or {}
+        table.insert(fields, { name = p.name or "Portal", inline = false, value = bits(p.tier and ("Tier " .. p.tier), p.lanes and (p.lanes .. " lanes"),
+            #mods > 0 and table.concat(mods, ", ") or "no modifiers", p.tries and p.max_tries and ("try %d/%d"):format(p.tries, p.max_tries),
+            p.left and (p.left .. " portals left")) })
+    end
+    if type(dg) == "table" then
+        local lines = { bits(("Depth %s/%s"):format(num(dg.depth), num(dg.rooms)), dg.lives and ("Lives " .. dg.lives),
+            #(dg.room or {}) > 0 and table.concat(dg.room, " + "), dg.coins and (commas(dg.coins) .. " coins"),
+            dg.chests and ("Chests %s (%s rare)"):format(num(dg.chests), num(dg.rare_chests or 0))) }
+        if #(dg.curses or {}) > 0 then table.insert(lines, "Curses: " .. table.concat(dg.curses, ", ")) end
+        if #(dg.items or {}) > 0 then table.insert(lines, "Items: " .. table.concat(dg.items, ", ")) end
+        table.insert(fields, { name = "Dungeon", value = table.concat(lines, "\n"):sub(1, 1000), inline = false })
+    end
     if not cfg.compact then -- Compact Result: no balance fields, just the summary, rewards and drops
         local b1, b2 = balanceFields()
         table.insert(fields, b1)

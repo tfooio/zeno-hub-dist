@@ -252,6 +252,34 @@ function Joiner.next_portal()
     return plan.portal
 end
 
+-- What the result webhook / run log says about the portal that was just played (nil outside a portal level). All of it is read live 2026-11-20 (Sky Portal tier 9):
+-- LevelData._portal_depth / _portal_lanes / _levelmodifiers, the portal item's _portal_tries / _portal_max_tries in the session inventory. "left" = portals of
+-- the same kind in the inventory that still have a try (this one included while it has one). Stage element buffs: no LevelData field found, not included.
+function Joiner.portal_info()
+    local ld = Game.loader().LevelData
+    if not (ld._is_map_or_portal_level and ld._portal_map_item_uuid) then return nil end
+    local mods, LM = {}, Game.data("LevelModifiers")
+    for _, m in ld._levelmodifiers or {} do table.insert(mods, LM[m.id] and LM[m.id].name or m.id) end
+    local info = { tier = ld._portal_depth, lanes = ld._portal_lanes, modifiers = mods }
+    local s = matchSession()
+    local want = tostring(ld._portal_map_item_uuid):gsub("[{}]", "")
+    local this, left = nil, 0
+    for _, it in (s and s.profile_data and s.profile_data.inventory.unique_items) or {} do
+        if tostring(it.uuid):gsub("[{}]", "") == want then this = it end
+    end
+    if this then
+        local u = this._unique_item_data or {}
+        info.name = Game.data("Items")[this.item_id] and Game.data("Items")[this.item_id].name
+        info.tries, info.max_tries = u._portal_tries, u._portal_max_tries
+        for _, it in s.profile_data.inventory.unique_items do
+            local x = it._unique_item_data
+            if it.item_id == this.item_id and x and (x._portal_tries or 0) < (x._portal_max_tries or 1) then left += 1 end
+        end
+        info.left = left
+    end
+    return info
+end
+
 -- Dungeon Run (src/dungeon.lua): resolves shop / shrine / chest / death, then the room to enter.
 function modes.dungeon()
     if not Hub.Dungeon then return nil, "no dungeon module" end

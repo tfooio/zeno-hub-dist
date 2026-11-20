@@ -162,4 +162,8 @@ if not ok then Hub.Core.log("ERROR info:", err) end
 ok, err = xpcall(function() Hub.Watchdog = Hub.require("watchdog") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR watchdog:", err) end
 
+-- Last: puts every module's boxes in their column and order (docs/features/ui-layout.md).
+ok, err = xpcall(function() Hub.Layout = Hub.require("layout") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR layout:", err) end
+
 return Hub

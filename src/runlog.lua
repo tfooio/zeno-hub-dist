@@ -29,6 +29,12 @@ local function unit_ids(list)
     return out
 end
 
+-- Portal / dungeon details come from the joiner and dungeon modules (loaded after this one, so looked up at call time); a failure leaves the field out.
+local function details(mod, fn)
+    local ok, r = pcall(function() return Hub[mod] and Hub[mod][fn]() end)
+    return ok and plain(r, 0) or nil
+end
+
 function RunLog.record(result)
     local stats = result.stats or {}
     local ok, ld = pcall(function() return Game.loader().LevelData end)
@@ -57,6 +63,8 @@ function RunLog.record(result)
         new_unit_ids = unit_ids(result.new_units),
         new_items = plain(result.new_items, 0),
         first_completion = result.first_completion,
+        portal = details("Joiner", "portal_info"),
+        dungeon = details("Dungeon", "info"),
     }
 end
 

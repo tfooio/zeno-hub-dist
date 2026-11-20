@@ -135,6 +135,26 @@ local function depth()
     return cfg.depth or 0
 end
 
+-- What the result webhook / run log says about the dungeon room just played (nil outside a dungeon match): depth, lives, the room's flags, coins,
+-- stored chests, curses and items carried. Shapes are the ones trace() reads; a value that is missing is left out.
+function Dungeon.info()
+    local ld = Hub.mode == "match" and Game.loader().LevelData
+    local d = ld and ld._dungeon and data()
+    if not d then return nil end
+    local Items = Game.data("Items")
+    local room = d.next and d.next[tostring(ld._dungeon.choice_str)]
+    local flags, curses, items = {}, {}, {}
+    for ty in room and room._t or {} do table.insert(flags, ROOM_LABEL[tostring(ty)] or tostring(ty)) end
+    for _, it in d._items or {} do
+        local name = Items[it.id] and Items[it.id].name or tostring(it.id)
+        table.insert(tostring(it.id):find("^_curse_") and curses or items, name)
+    end
+    table.sort(flags)
+    local r = d._resources or {}
+    return { depth = ld._dungeon.depth, rooms = core().NUM_ROOMS or 20, lives = d.selected_next and d.selected_next.lives, room = flags,
+        coins = r.money, chests = r.treasure, rare_chests = r.treasure_gold, curses = curses, items = items }
+end
+
 local function buyRank()
     local rank, i = {}, 0
     for _, id in cfg.buy_order do i += 1 if cfg.buy[id] then rank[id] = i end end
