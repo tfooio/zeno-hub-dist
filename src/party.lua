@@ -123,7 +123,14 @@ function Party.fill(limit)
 end
 
 -- Host Mode: the joiner calls this before it opens a pad, so the members are in the party (and get pulled onto the pad). Instant when they already are.
-function Party.prepare() if cfg.host then Party.fill(cfg.wait) end end
+-- It also waits (up to 40 s) for the listed player to be in this lobby: the other account loads a few seconds later, and the host used to open the portal alone (20:51).
+function Party.prepare()
+    if not cfg.host then return end
+    local t = os.clock()
+    while alive() and Party.absent() > 0 and os.clock() - t < 40 do task.wait(1) end
+    if Party.absent() > 0 then Core.log("party: listed player not in the lobby after 40 s, going without") end
+    Party.fill(cfg.wait)
+end
 
 -- Member side: accept an invite that comes from a listed player.
 local function acceptInvites()

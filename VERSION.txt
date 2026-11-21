@@ -1,2 +1,2 @@
-9d8fc11 2026-11-20
-Portals first, then the Summer Hunt with a party: team swap handoff, self-inviting host
+0d61c65 2026-11-20
+Party: one place sets the roles, the host waits for the follower before opening a portal

@@ -74,7 +74,7 @@ local stage = 0 -- lobby: 0 none, 1 retried, 2 rejoined
 local lastKey, lastChange, warned = nil, os.clock(), false
 
 local function lobbyCheck()
-    if not summerOn() or Core.config.summer.role == "Member" then loadedAt = os.clock() stage = 0 return end -- a member waits for the host by design
+    if not summerOn() or (Hub.Summer and Hub.Summer.party_role and Hub.Summer.party_role() == "Member") then loadedAt = os.clock() stage = 0 return end -- a member waits for the host by design
     if Hub.Summer and Hub.Summer.waitingStarfall and Hub.Summer.waitingStarfall() then loadedAt = os.clock() stage = 0 return end -- waiting for Starfall by choice
     local idle = (os.clock() - loadedAt) / 60
     if stage == 0 and idle >= cfg.lobby_min then
@@ -97,7 +97,7 @@ end
 -- (they are kept: the lobby opens them too). A seamless replay drops GameFinished and resets this.
 local function unattended()
     if Core.config.party and Core.config.party.follow then return true end -- a follower gets 2 min for the host's pick (below), Summer member or not
-    if summerOn() then return Core.config.summer.role ~= "Member" end -- a member follows the host
+    if summerOn() then return not (Hub.Summer and Hub.Summer.party_role and Hub.Summer.party_role() == "Member") end -- a member follows the host
     for _, m in Core.config.joiner or {} do
         if type(m) == "table" and m.enable then return true end
     end

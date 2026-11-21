@@ -270,8 +270,17 @@ end
 -- "Member" accepts the invite and only equips the party team; a party of two or more plays the party team, alone the Vegito team.
 -- UNVERIFIED: that the Summer Hunt pad takes a party (party_pulled_into_lobby is the game's own event for pulling members along).
 cfg.role = (cfg.role == "Host" or cfg.role == "Member") and cfg.role or "Off"
-function Summer.partyActive() return cfg.role ~= "Off" and Hub.Party ~= nil and Hub.Party.size() >= 2 end
-function Summer.member() return cfg.enable and cfg.role == "Member" end -- src/match.lua: the host decides what happens at match end
+-- One place sets the roles (user, 2026-11-20: the Summer role and Party Farming were out of step twice, and the Host-role account started a Hunt alone): Party
+-- Farming decides (Follow Host = Member, Host Mode = Host); the Multi Farm Role dropdown only counts when neither is on.
+local function partyRole()
+    local p = Core.config.party
+    if p and p.follow then return "Member" end
+    if p and p.host then return "Host" end
+    return cfg.role
+end
+Summer.party_role = partyRole
+function Summer.partyActive() return partyRole() ~= "Off" and Hub.Party ~= nil and Hub.Party.size() >= 2 end
+function Summer.member() return cfg.enable and partyRole() == "Member" end -- src/match.lua: the host decides what happens at match end
 
 -- The team to use for a weather: the saved one when Use My Saved Teams is on and it exists, else the planner's.
 local function teamFor(w)
@@ -372,7 +381,7 @@ local function hunt()
     end
     if not pcall(profile) then return idle("profile not readable yet") end
     if Hub.Lobby and Hub.Lobby.hold and Hub.Lobby.hold() then return idle("lobby jobs still running (summons, shops)") end
-    if cfg.role ~= "Member" then -- portals first: the Hunt starts when the Portal joiner has nothing left to open
+    if partyRole() ~= "Member" then -- portals first: the Hunt starts when the Portal joiner has nothing left to open
         local portals = Hub.Joiner and Hub.Joiner.portal_left and Hub.Joiner.portal_left()
         setPhase(portals and "portal" or "hunt")
         if portals then return idle("the Portal joiner still has portals") end
@@ -380,7 +389,7 @@ local function hunt()
     local w = Summer.weather()
     if not w then return idle("no weather on the Hunt pad") end
     if Summer.waitingStarfall() then return idle("waiting for Starfall weather (now " .. weatherName(w) .. ")") end
-    if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
+    if partyRole() == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
         if hostPhase() ~= "hunt" then memberKey = nil return idle("the host still has portals (or is not running Summer Hunt)") end
         if not Summer.partyActive() then memberKey = nil return end
         local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
@@ -393,7 +402,7 @@ local function hunt()
         return
     end
     busyUntil = os.clock() + 40
-    if cfg.role == "Host" and Hub.Party then -- the Member may still be loading into this lobby: wait for it, or the Hunt would start solo
+    if partyRole() == "Host" and Hub.Party then -- the Member may still be loading into this lobby: wait for it, or the Hunt would start solo
         local t0 = os.clock()
         while alive() and Hub.Party.absent() > 0 and os.clock() - t0 < 40 do task.wait(1) end
         if Hub.Party.absent() > 0 then Core.log("summer: party member not in the lobby after 40 s, going without") end
@@ -407,7 +416,7 @@ local function hunt()
         return
     end
     Core.save_config()
-    if cfg.role == "Host" and Hub.Party and Hub.Party.size() >= 2 then -- the Member swaps teams too: wait until it says so
+    if partyRole() == "Host" and Hub.Party and Hub.Party.size() >= 2 then -- the Member swaps teams too: wait until it says so
         local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
         Core.log("summer: member team", wait(function() return memberReady(key) end, 45) and "ready" or "not confirmed in 45 s, going anyway")
     end
@@ -459,7 +468,7 @@ if LOBBY then
         local lastStart = 0
         while alive() do
             task.wait(1)
-            if cfg.enable and cfg.role == "Member" and os.clock() - lastStart > 4 then
+            if cfg.enable and partyRole() == "Member" and os.clock() - lastStart > 4 then
                 local ok, onPad = pcall(function()
                     local pad = workspace._EVENT_CHALLENGES.Lobbies[PAD]
                     if pad.Teleporting.Value then return false end
@@ -1131,7 +1140,7 @@ if Tabs then
     hunt_box:AddToggle("SummerHunt", { Text = "Auto Summer Hunt", Tooltip = "Fully automatic: in the lobby it plans and equips the team for the current weather (this swaps your equipped units), joins the Summer Hunt and starts it. In the Hunt, Auto Play and the abilities run on their own settings (your saved Auto Play settings are not used). At match end it returns to the lobby when the hour changed.", Default = cfg.enable, Callback = function(v) cfg.enable = v Core.save_config() end })
     hunt_box:AddToggle("SummerStarfall", { Text = "Only Join on Starfall Weather", Tooltip = "The lobby waits (and does not count as stalled) until the Hunt pad shows Starfall, the weather where Star Golems drop Broken Stars. Pair it with Always Take Star Cards.", Default = cfg.onlyStarfall, Callback = function(v) cfg.onlyStarfall = v Core.save_config() end })
     hunt_box:AddToggle("SummerManual", { Text = "Use My Saved Teams", Tooltip = "Use the teams saved under Weather Teams instead of the planner (a weather without a team falls back to the planner).", Default = cfg.manual, Callback = function(v) cfg.manual = v Core.save_config() end })
-    hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
+    hunt_box:AddDropdown("SummerRole", { Text = "Multi Farm Role", Tooltip = "Only used when Party Farming has neither Host Mode nor Follow Host on (they decide the role: Host Mode = Host, Follow Host = Member). Off: solo, plays the Vegito team. Host: invites the players listed in Joiner > Party Farming into a party, waits for them, then joins the Hunt and starts it; a party plays Elyssia, Zombie, Aqua, the best pearl-bonus unit, a buffer and Bulby. Member: accepts the host's invite (turn on Auto Accept Party Invite there) and equips the party team; the host does the joining.", Values = { "Off", "Host", "Member" }, Default = cfg.role, Callback = function(v) cfg.role = v Core.save_config() end })
     followT = hunt_box:AddToggle("SummerFollow", { Text = "Follow Teammates' Placement", Tooltip = "Only with Use Matchmaking on and no party: farms go down at once, the other units wait for the other players' damage units (or the wave below), then stand where theirs stand along the path. In a party or with friends your units place normally.", Default = cfg.follow.enable, Callback = function(v) cfg.follow.enable = v Core.save_config() applyVis() end })
     followU = hunt_box:AddSlider("SummerFollowUnits", { Text = "Wait for Teammate Units", Tooltip = "Damage units of the other players to wait for before placing yours.", Default = cfg.follow.units, Min = 1, Max = 12, Rounding = 0, Callback = function(v) cfg.follow.units = v Core.save_config() end })
     followW = hunt_box:AddSlider("SummerFollowWave", { Text = "Place Anyway at Wave", Tooltip = "Your units are placed at this wave even when the teammates have not placed enough.", Default = cfg.follow.wave, Min = 1, Max = 30, Rounding = 0, Callback = function(v) cfg.follow.wave = v Core.save_config() end })
