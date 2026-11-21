@@ -31,7 +31,7 @@ local SPEC = {
         right = { "Room Priority" },
     },
     Macro = {
-        left = { "Manage", "Macro", "Information" },
+        left = { "Studio", "Manage", "Macro", "Information" },
         right = { "Play Macro Config", "Stage Macros" },
     },
     Misc = {

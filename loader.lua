@@ -162,6 +162,10 @@ if not ok then Hub.Core.log("ERROR info:", err) end
 ok, err = xpcall(function() Hub.Watchdog = Hub.require("watchdog") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR watchdog:", err) end
 
+-- After Macro (its config and dropdowns) and Units (picture code): the second macro window opens from a button in the Macro tab.
+ok, err = xpcall(function() Hub.Studio = Hub.require("studio") end, debug.traceback)
+if not ok then Hub.Core.log("ERROR studio:", err) end
+
 -- Last: puts every module's boxes in their column and order (docs/features/ui-layout.md).
 ok, err = xpcall(function() Hub.Layout = Hub.require("layout") end, debug.traceback)
 if not ok then Hub.Core.log("ERROR layout:", err) end
