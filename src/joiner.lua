@@ -242,6 +242,12 @@ local function pickPortal(inMatch)
     return nil, "no portal in inventory"
 end
 function modes.portal() return pickPortal(false) end
+-- Summer Hunt (src/summer.lua) waits while this is true: the Portal joiner is on and has a portal it would open (portals first, user 2026-11-20).
+function Joiner.portal_left()
+    if not cfg.portal.enable then return false end
+    local ok, plan = pcall(pickPortal, false)
+    return ok and plan ~= nil
+end
 -- Match end (src/match.lua): uuid of the next portal for set_game_finished_vote("replay", {item_uuid = uuid}), or nil.
 function Joiner.next_portal()
     local ld = Game.loader().LevelData

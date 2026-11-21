@@ -96,8 +96,8 @@ end
 -- that would not open): the lobby remote first, the rejoin a minute later. A dungeon gets 10 min, its last room may still be opening chests
 -- (they are kept: the lobby opens them too). A seamless replay drops GameFinished and resets this.
 local function unattended()
+    if Core.config.party and Core.config.party.follow then return true end -- a follower gets 2 min for the host's pick (below), Summer member or not
     if summerOn() then return Core.config.summer.role ~= "Member" end -- a member follows the host
-    if Core.config.party and Core.config.party.follow then return true end -- a follower gets 2 min for the host's pick (below)
     for _, m in Core.config.joiner or {} do
         if type(m) == "table" and m.enable then return true end
     end

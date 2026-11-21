@@ -338,6 +338,29 @@ end
 
 -- Hunt loop (lobby). One join per 40 s so a slow teleport is not repeated.
 local busyUntil, memberKey = 0, nil
+-- Portals first, then the Hunt (user, 2026-11-20). The Portal joiner on the host account knows when its portals are out; a Member cannot read that, so the
+-- host writes the phase to Data/party_phase.json (the Data folder is shared by the accounts on this PC) and the Member follows it: it keeps its portal team
+-- until the host says "hunt", then equips the Hunt team. A phase older than 10 min is ignored (the host rewrites it every minute while it is in the lobby).
+local PHASE_FILE, lastPhase, lastPhaseAt = Core.paths.data .. "/party_phase.json", nil, -99
+local function setPhase(p)
+    if p == lastPhase and os.clock() - lastPhaseAt < 60 then return end
+    lastPhase, lastPhaseAt = p, os.clock()
+    pcall(writefile, PHASE_FILE, game:GetService("HttpService"):JSONEncode({ phase = p, at = os.time() }))
+end
+-- The Member says when its Hunt team is on the hotbar (key = weather + party id); the Host waits for that before it joins, or the Member is teleported
+-- half way through its swap (seen 2026-11-20: the follower played its portal team in the Hunt).
+local READY_FILE = Core.paths.data .. "/party_ready.json"
+local function setReady(key)
+    pcall(writefile, READY_FILE, game:GetService("HttpService"):JSONEncode({ key = key, at = os.time() }))
+end
+local function memberReady(key)
+    local ok, t = pcall(function() return game:GetService("HttpService"):JSONDecode(readfile(READY_FILE)) end)
+    return ok and type(t) == "table" and t.key == key and os.time() - (t.at or 0) < 600
+end
+local function hostPhase()
+    local ok, t = pcall(function() return game:GetService("HttpService"):JSONDecode(readfile(PHASE_FILE)) end)
+    if ok and type(t) == "table" and os.time() - (t.at or 0) < 600 then return t.phase end
+end
 function Summer.nudge() busyUntil, memberKey = 0, nil end -- src/watchdog.lua: try the join / the team again right now
 local function hunt()
     if os.clock() < busyUntil then return end
@@ -349,10 +372,16 @@ local function hunt()
     end
     if not pcall(profile) then return idle("profile not readable yet") end
     if Hub.Lobby and Hub.Lobby.hold and Hub.Lobby.hold() then return idle("lobby jobs still running (summons, shops)") end
+    if cfg.role ~= "Member" then -- portals first: the Hunt starts when the Portal joiner has nothing left to open
+        local portals = Hub.Joiner and Hub.Joiner.portal_left and Hub.Joiner.portal_left()
+        setPhase(portals and "portal" or "hunt")
+        if portals then return idle("the Portal joiner still has portals") end
+    end
     local w = Summer.weather()
     if not w then return idle("no weather on the Hunt pad") end
     if Summer.waitingStarfall() then return idle("waiting for Starfall weather (now " .. weatherName(w) .. ")") end
     if cfg.role == "Member" then -- the host joins the pad and starts; this account equips the team for the weather once it is in the party
+        if hostPhase() ~= "hunt" then memberKey = nil return idle("the host still has portals (or is not running Summer Hunt)") end
         if not Summer.partyActive() then memberKey = nil return end
         local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
         if key == memberKey then return end
@@ -360,11 +389,16 @@ local function hunt()
         pcall(Hub.Skins.run)
         local t, text = teamFor(w)
         Core.log("summer: party member, team for", text or "-")
-        if t and Summer.apply(t, weatherName(w)) then memberKey = key end
+        if t and Summer.apply(t, weatherName(w)) then memberKey = key setReady(key) end
         return
     end
     busyUntil = os.clock() + 40
-    if cfg.role == "Host" and Hub.Party then Hub.Party.fill(45) end -- invite the listed players and wait for them; alone after that = the solo team
+    if cfg.role == "Host" and Hub.Party then -- the Member may still be loading into this lobby: wait for it, or the Hunt would start solo
+        local t0 = os.clock()
+        while alive() and Hub.Party.absent() > 0 and os.clock() - t0 < 40 do task.wait(1) end
+        if Hub.Party.absent() > 0 then Core.log("summer: party member not in the lobby after 40 s, going without") end
+        Hub.Party.fill(45)
+    end -- invite the listed players and wait for them; alone after that = the solo team
     pcall(Hub.Skins.run) -- summer skins on the best evolved copies first: they carry pearl bonus and damage (nothing to do = silent)
     local t, text = teamFor(w)
     Core.log("summer: team for", text or "-")
@@ -373,6 +407,10 @@ local function hunt()
         return
     end
     Core.save_config()
+    if cfg.role == "Host" and Hub.Party and Hub.Party.size() >= 2 then -- the Member swaps teams too: wait until it says so
+        local key = w .. tostring(game:GetService("Players").LocalPlayer:GetAttribute("PartyId"))
+        Core.log("summer: member team", wait(function() return memberReady(key) end, 45) and "ready" or "not confirmed in 45 s, going anyway")
+    end
     -- Matchmaking that finds no match (2026-11-07: 41 queues in 100 min, 10 watchdog rejoins, nothing started): after two queues in a row with no Hunt,
     -- this Hunt is played from the pad, solo (user, 2026-11-09). cfg.mmFails is saved (a watchdog rejoin reloads the hub) and cleared when a Hunt loads.
     local mm = cfg.matchmaking and Hub.Joiner ~= nil

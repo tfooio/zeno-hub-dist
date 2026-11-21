@@ -101,6 +101,13 @@ local function invite()
     end
 end
 
+-- How many listed names are not in this server yet (the other account is still loading into the lobby).
+function Party.absent()
+    local n = 0
+    for _ in cfg.names:gmatch("[^,;%s]+") do n += 1 end
+    return math.max(0, n - #listed())
+end
+
 -- Host side: invite the listed players and wait until every one of them in the server is in the party (or the time runs out).
 function Party.fill(limit)
     local want = listed()
@@ -213,6 +220,8 @@ if Hub.mode == "lobby" then
     task.spawn(function()
         task.wait(5)
         while alive() do
+            -- Host Mode keeps the party formed in the lobby by itself (user, 2026-11-20: the invite was only sent while a joiner or the Hunt was opening a pad).
+            if cfg.host and cfg.names ~= "" and #missing() > 0 then invite() end
             if cfg.follow then
                 local ok, err = xpcall(follow, debug.traceback)
                 if not ok then Core.log("ERROR party", err) end

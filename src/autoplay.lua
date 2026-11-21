@@ -1633,6 +1633,7 @@ end
 AutoPlay.sampleEnemies = sampleEnemies
 function AutoPlay.stats() return counts, { seen = trailSeen, off = trailOff } end
 local notified = false
+local START_HOLD = 1.5 -- seconds after the match starts before Auto Play places anything (see the glitch note in start)
 function AutoPlay.start()
     runId += 1
     local myId = runId
@@ -1652,10 +1653,18 @@ function AutoPlay.start()
         local owed = false -- Upgrade and Place: one upgrade is due after a placement
         local lastProgress, lastTrail, lastExplain, lastPrio = os.clock(), 0, 0, 0
         local fullAt = nil
+        -- Game glitch (user, 2026-11-20): a unit placed in the first moments of the match (mostly Bulma) takes its money and never appears. Nothing is placed
+        -- until START_HOLD seconds after GameStarted turns on; that also covers the restart of a seamless replay (GameStarted drops and rises again).
+        local holdUntil = 0
+        local started = workspace:FindFirstChild("_DATA") and workspace._DATA:FindFirstChild("GameStarted")
+        local function arm() if started and started.Value then holdUntil = os.clock() + START_HOLD end end
+        arm()
+        local startConn = started and started.Changed:Connect(arm)
         while live() do
             local ok, err = pcall(function()
                 local finished = workspace:FindFirstChild("_DATA") and workspace._DATA:FindFirstChild("GameFinished")
                 if finished and finished.Value then status("match finished") lastProgress = os.clock() task.wait(2) return end
+                if os.clock() < holdUntil then status("match just started, waiting") lastProgress = os.clock() task.wait(0.1) return end
                 if macroOwns() then status("a stage macro is playing") lastProgress = os.clock() task.wait(1) return end
                 local units = myUnits()
                 tryFuse(units)
@@ -1731,6 +1740,7 @@ function AutoPlay.start()
             end
             task.wait(0.3)
         end
+        if startConn then startConn:Disconnect() end
     end)
 end
 

@@ -1,2 +1,2 @@
-529f89f 2026-11-20
-Layout pass (boxes ordered per tab, tall lists capped, Team Equipper collapsed); portal and dungeon info in result webhooks and the run log
+9d8fc11 2026-11-20
+Portals first, then the Summer Hunt with a party: team swap handoff, self-inviting host
